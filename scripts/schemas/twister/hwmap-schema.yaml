@@ -40,6 +40,8 @@ items:
       type: string
     pre_script:
       type: string
+    failure_script:
+      type: string
     fixtures:
       type: array
       items:
@@ -60,6 +62,8 @@ items:
         post_script_timeout:
           type: integer
         post_flash_timeout:
+          type: integer
+        failure_script_timeout:
           type: integer
       additionalProperties: false
     west_flash_cmd:
