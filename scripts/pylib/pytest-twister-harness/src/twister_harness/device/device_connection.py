@@ -20,6 +20,7 @@ import serial
 from twister_harness.device.fifo_handler import FifoHandler
 from twister_harness.exceptions import TwisterHarnessException, TwisterHarnessTimeoutException
 from twister_harness.twister_harness_config import DeviceConfig, DeviceSerialConfig
+from twister_harness.device.utils import terminate_process
 
 logger = logging.getLogger(__name__)
 
@@ -282,8 +283,7 @@ class SerialConnection(DeviceConnection):
     def _close_serial_pty(self) -> None:
         """Terminate the process opened for serial pty script"""
         if self._serial_pty_proc:
-            self._serial_pty_proc.terminate()
-            self._serial_pty_proc.communicate(timeout=self.timeout)
+            terminate_process(self._serial_pty_proc, timeout=self.timeout)
             logger.debug('Process %s terminated', self.serial_config.serial_pty)
             self._serial_pty_proc = None
 
