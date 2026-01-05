@@ -120,6 +120,7 @@ struct i2c_stm32_data {
 	i2c_stm32_smbalert_cb_func_t smbalert_cb_func;
 	const struct device *smbalert_cb_dev;
 #endif /* CONFIG_SMBUS_STM32_SMBALERT */
+	bool cancelled;
 #endif /* CONFIG_I2C_RTIO */
 
 #ifdef CONFIG_I2C_STM32_V2_DMA

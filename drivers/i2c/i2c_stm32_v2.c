@@ -1152,6 +1152,7 @@ static inline int msg_done(const struct device *dev,
 			   unsigned int current_msg_flags)
 {
 	const struct i2c_stm32_config *cfg = dev->config;
+	struct i2c_stm32_data *data = dev->data;
 	I2C_TypeDef *i2c = cfg->i2c;
 	k_timepoint_t end = sys_timepoint_calc(cfg->transfer_timeout);
 
@@ -1160,6 +1161,10 @@ static inline int msg_done(const struct device *dev,
 		if (check_errors(dev, __func__)) {
 			return -EIO;
 		}
+		if (data->cancelled) {
+			/* proceed to issue stop */
+			break;
+		}
 		if (sys_timepoint_expired(end)) {
 			return -ETIMEDOUT;
 		}
@@ -1167,7 +1172,8 @@ static inline int msg_done(const struct device *dev,
 	/* Issue stop condition if necessary */
 	if (current_msg_flags & I2C_MSG_STOP) {
 		LL_I2C_GenerateStopCondition(i2c);
-		while (!LL_I2C_IsActiveFlag_STOP(i2c)) {
+		while (!LL_I2C_IsActiveFlag_STOP(i2c)
+		       && !data->cancelled) {
 			if (sys_timepoint_expired(end)) {
 				return -ETIMEDOUT;
 			}
@@ -1177,13 +1183,14 @@ static inline int msg_done(const struct device *dev,
 		LL_I2C_DisableReloadMode(i2c);
 	}
 
-	return 0;
+	return data->cancelled ? -EIO : 0;
 }
 
 static int i2c_stm32_msg_write(const struct device *dev, struct i2c_msg *msg,
 			       uint8_t *next_msg_flags, uint16_t target)
 {
 	const struct i2c_stm32_config *cfg = dev->config;
+	struct i2c_stm32_data *data = dev->data;
 	I2C_TypeDef *i2c = cfg->i2c;
 	unsigned int len = 0U;
 	uint8_t *buf = msg->buf;
@@ -1192,8 +1199,8 @@ static int i2c_stm32_msg_write(const struct device *dev, struct i2c_msg *msg,
 	msg_init(dev, msg, next_msg_flags, target, LL_I2C_REQUEST_WRITE);
 
 	len = msg->len;
-	while (len) {
-		while (1) {
+	while (len && !data->cancelled) {
+		while (!data->cancelled) {
 			if (LL_I2C_IsActiveFlag_TXIS(i2c)) {
 				break;
 			}
@@ -1219,6 +1226,7 @@ static int i2c_stm32_msg_read(const struct device *dev, struct i2c_msg *msg,
 			      uint8_t *next_msg_flags, uint16_t target)
 {
 	const struct i2c_stm32_config *cfg = dev->config;
+	struct i2c_stm32_data *data = dev->data;
 	I2C_TypeDef *i2c = cfg->i2c;
 	unsigned int len = 0U;
 	uint8_t *buf = msg->buf;
@@ -1227,8 +1235,8 @@ static int i2c_stm32_msg_read(const struct device *dev, struct i2c_msg *msg,
 	msg_init(dev, msg, next_msg_flags, target, LL_I2C_REQUEST_READ);
 
 	len = msg->len;
-	while (len) {
-		while (!LL_I2C_IsActiveFlag_RXNE(i2c)) {
+	while (len && !data->cancelled) {
+		while (!data->cancelled && !LL_I2C_IsActiveFlag_RXNE(i2c)) {
 			if (check_errors(dev, __func__)) {
 				return -EIO;
 			}
@@ -1584,6 +1592,11 @@ int i2c_stm32_transaction(const struct device *dev,
 {
 	int ret = 0;
 
+	struct i2c_stm32_data *data = dev->data;
+	if (data->cancelled) {
+		return -EIO;
+	}
+
 #ifdef CONFIG_I2C_STM32_INTERRUPT
 	ret = stm32_i2c_irq_xfer(dev, &msg, next_msg_flags, periph);
 #else
@@ -1599,7 +1612,7 @@ int i2c_stm32_transaction(const struct device *dev,
 	 * which will make the combination of all chunks to look like one big
 	 * transaction on the wire.
 	 */
-	struct i2c_stm32_data *data = dev->data;
+
 	const struct i2c_stm32_config *cfg = dev->config;
 	I2C_TypeDef *i2c = cfg->i2c;
 	const uint32_t i2c_stm32_maxchunk = 255U;

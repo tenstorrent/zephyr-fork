@@ -334,6 +334,18 @@ typedef void (*i2c_api_iodev_submit)(const struct device *dev,
 typedef int (*i2c_api_recover_bus_t)(const struct device *dev);
 
 /**
+ * @brief Callback API to cancel all current and future I2C transfers.
+ * See i2c_cancel() for argument description.
+ */
+typedef void (*i2c_api_cancel_t)(const struct device *dev);
+
+/**
+ * @brief Callback API to allow I2C transfers again after i2c_cancel().
+ * See i2c_uncancel() for argument description.
+ */
+typedef void (*i2c_api_uncancel_t)(const struct device *dev);
+
+/**
  * @driver_ops{I2C}
  */
 __subsystem struct i2c_driver_api {
@@ -363,6 +375,10 @@ __subsystem struct i2c_driver_api {
 #endif
 	/** @driver_ops_optional @copybrief i2c_recover_bus */
 	i2c_api_recover_bus_t recover_bus;
+	/** @driver_ops_optional @copybrief i2c_cancel */
+	i2c_api_cancel_t cancel;
+	/** @driver_ops_optional @copybrief i2c_uncancel */
+	i2c_api_uncancel_t uncancel;
 };
 
 /**
@@ -1514,6 +1530,58 @@ static inline int z_impl_i2c_target_driver_unregister(const struct device *dev)
 	return DEVICE_API_GET(i2c_target, dev)->driver_unregister(dev);
 }
 
+/**
+ * @brief Cancel all outstanding I2C transactions and block future
+ *
+ * Any current I2C transaction on this device immediately fails
+ * and returns -ECANCELED. Further I2C transactions fail until
+ * i2c_uncancel is called.
+ *
+ * @param dev Pointer to the device structure for the I2C controller.
+ *
+ * @retval 0 If successful.
+ * @retval -ENOSYS If cancellation is not implemented by the driver.
+ */
+__syscall int i2c_cancel(const struct device *dev);
+
+static inline int z_impl_i2c_cancel(const struct device *dev)
+{
+	const struct i2c_driver_api *api = (const struct i2c_driver_api *)dev->api;
+
+	if (api->cancel == NULL) {
+		return -ENOSYS;
+	}
+
+	api->cancel(dev);
+
+	return 0;
+}
+
+/**
+ * @brief Restore normal I2C operation after cancellation
+ *
+ * The I2C controller processes transactions.
+ *
+ * @param dev Pointer to the device structure for the I2C controller.
+ *
+ * @retval 0 If successful.
+ * @retval -ENOSYS If cancellation is not implemented by the driver.
+ */
+__syscall int i2c_uncancel(const struct device *dev);
+
+static inline int z_impl_i2c_uncancel(const struct device *dev)
+{
+	const struct i2c_driver_api *api = (const struct i2c_driver_api *)dev->api;
+
+	if (api->uncancel == NULL) {
+		return -ENOSYS;
+	}
+
+	api->uncancel(dev);
+
+	return 0;
+}
+
 /*
  * Derived i2c APIs -- all implemented in terms of i2c_transfer()
  */
@@ -1933,6 +2001,7 @@ static inline int i2c_reg_update_byte_dt(const struct i2c_dt_spec *spec,
 	return i2c_reg_update_byte(spec->bus, spec->addr,
 				   reg_addr, mask, value);
 }
+
 
 #ifdef __cplusplus
 }
