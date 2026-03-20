@@ -405,7 +405,7 @@ class ClangFormatCheck(ComplianceTest):
                         msg = "".join([str(l) for l in hunk[before:-after or None]])
 
                         # show the hunk at the last line
-                        self.fmtd_failure("notice",
+                        self.fmtd_failure("error",
                                           "You may want to run clang-format on this change",
                                           file, line=hunk.source_start + hunk.source_length - after,
                                           desc=f'\r\n{msg}')
