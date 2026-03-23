@@ -1388,6 +1388,7 @@ flagged.
         "DMA_LINK_ALIGNMENT",
         "DMA_LOOP_ALIGNMENT",
         "DMA_SG_ALIGNMENT",
+        "DMA_TRANSFER_CHANNEL_NR_1",
         "ERR",
         "ESP_DIF_LIBRARY",  # Referenced in CMake comment
         "EXPERIMENTAL",
