@@ -172,6 +172,9 @@ static void i2c_stm32_uncancel(const struct device *dev)
 {
 	struct i2c_stm32_data *data = dev->data;
 	data->cancelled = false;
+#ifdef CONFIG_I2C_STM32_INTERRUPT
+	k_sem_reset(&data->device_sync_sem);
+#endif
 }
 
 DEVICE_API(i2c, i2c_stm32_driver_api) = {

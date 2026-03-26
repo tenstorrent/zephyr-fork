@@ -860,6 +860,11 @@ static int stm32_i2c_irq_msg_finish(const struct device *dev, struct i2c_msg *ms
 		ret = -EIO;
 	}
 
+	if (data->cancelled) {
+		LOG_DBG("CANCELLED");
+		ret = -ECANCELED;
+	}
+
 #if defined(CONFIG_I2C_TARGET)
 	if (!keep_enabled || (ret != 0)) {
 		data->controller_active = false;
