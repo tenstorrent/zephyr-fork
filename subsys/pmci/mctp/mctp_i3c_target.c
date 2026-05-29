@@ -59,6 +59,10 @@ int mctp_i3c_target_write_received(struct i3c_target_config *config, uint8_t val
 		/*
 		 * First byte of the transaction, so allocate
 		 * Do it here since not all i3c drivers might call write_requested
+		 *
+		 * mctp_pktbuf_alloc implementation always allocates a fixed amount per binding.
+		 * The 0 len passed in indicates that we start with 0 bytes valid in the allocated
+		 * buffer. The bytes are then pushed 1-by-1 via mctp_pktbuf_push.
 		 */
 		b->rx_pkt = mctp_pktbuf_alloc(&b->binding, 0);
 		if (b->rx_pkt == NULL) {
