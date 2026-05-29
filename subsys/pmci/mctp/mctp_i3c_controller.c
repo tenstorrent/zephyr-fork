@@ -33,9 +33,9 @@ static inline void mctp_i3c_recv_msg(struct mctp_binding_i3c_controller *binding
 	int rc = i3c_transfer(binding->endpoint_i3c_devs[endpoint_idx], &msg, 1);
 
 	if (rc != 0) {
-#ifdef CONFIG_I3C_USE_IBI
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_IBI_MODE
 		LOG_ERR("Error requesting read from endpoint %d: %d", endpoint_idx, rc);
-#endif /*CONFIG_I3C_USE_IBI*/
+#endif /*CONFIG_MCTP_I3C_CONTROLLER_IBI_MODE*/
 		return;
 	}
 
@@ -59,7 +59,7 @@ static inline void mctp_i3c_recv_msg(struct mctp_binding_i3c_controller *binding
 	mctp_pktbuf_free(pkt);
 }
 
-#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE
 
 static void mctp_i3c_poll_work_handler(struct k_work *work)
 {
@@ -75,7 +75,7 @@ static void mctp_i3c_poll_work_handler(struct k_work *work)
 }
 #endif
 
-#ifdef CONFIG_I3C_USE_IBI
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_IBI_MODE
 int mctp_i3c_ibi_cb(struct i3c_device_desc *target,
 		    struct i3c_ibi_payload *payload)
 {
@@ -160,7 +160,7 @@ int mctp_i3c_controller_start(struct mctp_binding *binding)
 	for (int i = 0; i < b->num_endpoints; i++) {
 		mctp_i3c_endpoint_bind(b->devices[i], b, &b->endpoint_i3c_devs[i]);
 
-#ifdef CONFIG_I3C_USE_IBI
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_IBI_MODE
 		int rc;
 
 		LOG_INF("Enabling IBI for TARGET %p PID %llx BCR %x",
@@ -186,7 +186,7 @@ int mctp_i3c_controller_start(struct mctp_binding *binding)
 #endif
 	}
 
-#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE
 	k_work_init_delayable(&b->poll_work, mctp_i3c_poll_work_handler);
 	(void)k_work_schedule(&b->poll_work, K_NO_WAIT);
 #endif
