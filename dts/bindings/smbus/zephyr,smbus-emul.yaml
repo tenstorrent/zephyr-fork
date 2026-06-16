@@ -1,0 +1,11 @@
+description: Emulated SMBus controller
+
+compatible: "zephyr,smbus-emul"
+
+include: smbus-controller.yaml
+
+properties:
+  i2c:
+    type: phandle
+    required: true
+    description: Reference to the I2C bus controller (real or emulated)

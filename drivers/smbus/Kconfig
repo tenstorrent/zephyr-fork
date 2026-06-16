@@ -85,6 +85,21 @@ config SMBUS_INTEL_PCH_SMBALERT
 
 endif # SMBUS_INTEL_PCH
 
+config SMBUS_EMUL
+	bool "Emulated SMBus driver"
+	default y
+	depends on DT_HAS_ZEPHYR_SMBUS_EMUL_ENABLED
+	select SMBUS_COMMON_OPERATIONS
+	select SMBUS_SOFT_PEC
+	help
+	  Enable emulated SMBus driver for use with emulated I2C buses.
+	  This driver wraps any I2C controller (real or emulated) with SMBus protocol support.
+
+config SMBUS_COMMON_OPERATIONS
+	bool
+	help
+	  Internal symbol to compile shared SMBus protocol operations used by drivers.
+
 menuconfig SMBUS_STM32
 	bool "STM32 SMBus driver"
 	default y
