@@ -6,6 +6,7 @@
 
 #define DT_DRV_COMPAT jedec_mspi_nor
 
+#include <zephyr/drivers/flash/mspi_nor.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/device.h>
@@ -702,6 +703,54 @@ static int api_read_jedec_id(const struct device *dev, uint8_t *id)
 	return rc;
 }
 #endif /* CONFIG_FLASH_JESD216_API  */
+
+#if defined(CONFIG_FLASH_EX_OP_ENABLED)
+static int api_ex_op(const struct device *dev, uint16_t code,
+		     const uintptr_t in, void *out)
+{
+	const struct flash_mspi_nor_config *dev_config = dev->config;
+	struct flash_mspi_nor_data *dev_data = dev->data;
+	const struct flash_mspi_nor_pp *pp = (const struct flash_mspi_nor_pp *)in;
+	int rc;
+
+	ARG_UNUSED(out);
+
+	if (code != FLASH_MSPI_NOR_EX_OP_SET_PP) {
+		return -ENOTSUP;
+	}
+
+	if (pp == NULL || pp->cmd == 0) {
+		return -EINVAL;
+	}
+
+	if (!dev_data->chip_initialized) {
+		return -EAGAIN;
+	}
+
+	rc = acquire(dev);
+	if (rc < 0) {
+		return rc;
+	}
+
+	dev_data->cmd_info.pp_cmd = pp->cmd;
+
+	memcpy(&dev_data->mspi_dev_write_cfg, &dev_config->mspi_nor_cfg,
+	       sizeof(dev_config->mspi_nor_cfg));
+	dev_data->mspi_dev_write_cfg.io_mode = pp->io_mode;
+	dev_data->mspi_dev_write_cfg.freq = dev_config->write_freq;
+	/* Force perform_xfer() to re-apply the write config even if this
+	 * struct was the one most recently applied to the controller.
+	 */
+	if (dev_data->last_applied_cfg == &dev_data->mspi_dev_write_cfg) {
+		dev_data->last_applied_cfg = NULL;
+	}
+	dev_data->write_cfg = &dev_data->mspi_dev_write_cfg;
+
+	release(dev);
+
+	return 0;
+}
+#endif /* CONFIG_FLASH_EX_OP_ENABLED */
 
 #if defined(WITH_DPD)
 static int enter_dpd(const struct device *const dev)
@@ -1441,6 +1490,9 @@ static DEVICE_API(flash, drv_api) = {
 #if defined(CONFIG_FLASH_JESD216_API)
 	.sfdp_read = api_sfdp_read,
 	.read_jedec_id = api_read_jedec_id,
+#endif
+#if defined(CONFIG_FLASH_EX_OP_ENABLED)
+	.ex_op = api_ex_op,
 #endif
 };
 
