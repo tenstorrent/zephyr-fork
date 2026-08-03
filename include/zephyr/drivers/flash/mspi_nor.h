@@ -35,6 +35,19 @@ enum flash_mspi_nor_ex_ops {
 	 * structure. No output.
 	 */
 	FLASH_MSPI_NOR_EX_OP_SET_PP = FLASH_EX_OP_VENDOR_BASE,
+
+	/**
+	 * Set the number of RX dummy cycles for read commands at runtime.
+	 *
+	 * Overrides the rx-dummy devicetree property, e.g. to match the
+	 * dummy-cycle configuration of the flash chip identified at
+	 * runtime. Must be called after the driver has initialized and
+	 * before the first read.
+	 *
+	 * The cycle count is passed directly in the input argument, not
+	 * through a pointer. No output.
+	 */
+	FLASH_MSPI_NOR_EX_OP_SET_RX_DUMMY,
 };
 
 /** @brief Input for @ref FLASH_MSPI_NOR_EX_OP_SET_PP. */

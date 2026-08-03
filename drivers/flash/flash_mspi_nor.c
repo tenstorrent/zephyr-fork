@@ -376,6 +376,11 @@ static uint8_t get_rx_dummy(const struct device *dev)
 	const struct flash_mspi_nor_config *dev_config = dev->config;
 	struct flash_mspi_nor_data *dev_data = dev->data;
 
+	/* A FLASH_MSPI_NOR_EX_OP_SET_RX_DUMMY override takes precedence. */
+	if (dev_data->rx_dummy_overridden) {
+		return dev_data->rx_dummy_override;
+	}
+
 	/* If the number of RX dummy cycles is specified in dts, use that value. */
 	if (dev_config->rx_dummy_specified) {
 		return dev_config->mspi_nor_cfg.rx_dummy;
@@ -710,17 +715,25 @@ static int api_ex_op(const struct device *dev, uint16_t code,
 {
 	const struct flash_mspi_nor_config *dev_config = dev->config;
 	struct flash_mspi_nor_data *dev_data = dev->data;
-	const struct flash_mspi_nor_pp *pp = (const struct flash_mspi_nor_pp *)in;
+	const struct flash_mspi_nor_pp *pp = NULL;
 	int rc;
 
 	ARG_UNUSED(out);
 
-	if (code != FLASH_MSPI_NOR_EX_OP_SET_PP) {
+	switch (code) {
+	case FLASH_MSPI_NOR_EX_OP_SET_PP:
+		pp = (const struct flash_mspi_nor_pp *)in;
+		if (pp == NULL || pp->cmd == 0) {
+			return -EINVAL;
+		}
+		break;
+	case FLASH_MSPI_NOR_EX_OP_SET_RX_DUMMY:
+		if (in > UINT8_MAX) {
+			return -EINVAL;
+		}
+		break;
+	default:
 		return -ENOTSUP;
-	}
-
-	if (pp == NULL || pp->cmd == 0) {
-		return -EINVAL;
 	}
 
 	if (!dev_data->chip_initialized) {
@@ -732,19 +745,25 @@ static int api_ex_op(const struct device *dev, uint16_t code,
 		return rc;
 	}
 
-	dev_data->cmd_info.pp_cmd = pp->cmd;
+	if (code == FLASH_MSPI_NOR_EX_OP_SET_PP) {
+		dev_data->cmd_info.pp_cmd = pp->cmd;
 
-	memcpy(&dev_data->mspi_dev_write_cfg, &dev_config->mspi_nor_cfg,
-	       sizeof(dev_config->mspi_nor_cfg));
-	dev_data->mspi_dev_write_cfg.io_mode = pp->io_mode;
-	dev_data->mspi_dev_write_cfg.freq = dev_config->write_freq;
-	/* Force perform_xfer() to re-apply the write config even if this
-	 * struct was the one most recently applied to the controller.
-	 */
-	if (dev_data->last_applied_cfg == &dev_data->mspi_dev_write_cfg) {
-		dev_data->last_applied_cfg = NULL;
+		memcpy(&dev_data->mspi_dev_write_cfg, &dev_config->mspi_nor_cfg,
+		       sizeof(dev_config->mspi_nor_cfg));
+		dev_data->mspi_dev_write_cfg.io_mode = pp->io_mode;
+		dev_data->mspi_dev_write_cfg.freq = dev_config->write_freq;
+		/* Force perform_xfer() to re-apply the write config even if
+		 * this struct was the one most recently applied to the
+		 * controller.
+		 */
+		if (dev_data->last_applied_cfg == &dev_data->mspi_dev_write_cfg) {
+			dev_data->last_applied_cfg = NULL;
+		}
+		dev_data->write_cfg = &dev_data->mspi_dev_write_cfg;
+	} else {
+		dev_data->rx_dummy_override = (uint8_t)in;
+		dev_data->rx_dummy_overridden = true;
 	}
-	dev_data->write_cfg = &dev_data->mspi_dev_write_cfg;
 
 	release(dev);
 

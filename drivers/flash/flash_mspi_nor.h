@@ -133,6 +133,8 @@ struct flash_mspi_nor_data {
 	uint32_t enter_dpd_cycle;
 #endif
 	bool chip_initialized;
+	uint8_t rx_dummy_override;
+	bool rx_dummy_overridden;
 	const struct mspi_dev_cfg *read_cfg;
 	struct mspi_dev_cfg mspi_dev_read_cfg;
 	const struct mspi_dev_cfg *write_cfg;
