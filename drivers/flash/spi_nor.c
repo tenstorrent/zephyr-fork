@@ -1345,9 +1345,11 @@ static int spi_nor_process_sfdp(const struct device *dev)
 	/* For runtime we need to read the SFDP table, identify the
 	 * BFP block, and process it.
 	 */
-	const uint8_t decl_nph = 2;
+	/* Scan enough parameter headers to reach the 4BAIT table, which some
+	 * chips (e.g. MX25U51245G) place third, after a vendor table.
+	 */
+	const uint8_t decl_nph = 3;
 	union {
-		/* We only process BFP so use one parameter block */
 		uint8_t raw[JESD216_SFDP_SIZE(decl_nph)];
 		struct jesd216_sfdp_header sfdp;
 	} u_header;
