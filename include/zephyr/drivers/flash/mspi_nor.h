@@ -48,6 +48,21 @@ enum flash_mspi_nor_ex_ops {
 	 * through a pointer. No output.
 	 */
 	FLASH_MSPI_NOR_EX_OP_SET_RX_DUMMY,
+
+	/**
+	 * Fall back to single-line commands at runtime.
+	 *
+	 * Switches reads to Fast Read (0Bh, or 0Ch with a 4-byte address;
+	 * 8 dummy cycles) and programming to Page Program (02h/12h), all
+	 * in single IO mode. These commands need no chip-specific
+	 * configuration, so they are a safe fallback when a chip cannot
+	 * be configured to match the devicetree settings. Overrides any
+	 * previously set PP command or RX dummy-cycle count. Must be
+	 * called after the driver has initialized. Not supported when the
+	 * command phase itself uses multiple IO lines (x-x-x modes).
+	 * No input, no output.
+	 */
+	FLASH_MSPI_NOR_EX_OP_SET_SINGLE_IO,
 };
 
 /** @brief Input for @ref FLASH_MSPI_NOR_EX_OP_SET_PP. */

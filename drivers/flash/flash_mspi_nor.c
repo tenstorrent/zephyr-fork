@@ -732,6 +732,11 @@ static int api_ex_op(const struct device *dev, uint16_t code,
 			return -EINVAL;
 		}
 		break;
+	case FLASH_MSPI_NOR_EX_OP_SET_SINGLE_IO:
+		if (dev_config->multi_io_cmd) {
+			return -ENOTSUP;
+		}
+		break;
 	default:
 		return -ENOTSUP;
 	}
@@ -745,7 +750,8 @@ static int api_ex_op(const struct device *dev, uint16_t code,
 		return rc;
 	}
 
-	if (code == FLASH_MSPI_NOR_EX_OP_SET_PP) {
+	switch (code) {
+	case FLASH_MSPI_NOR_EX_OP_SET_PP:
 		dev_data->cmd_info.pp_cmd = pp->cmd;
 
 		memcpy(&dev_data->mspi_dev_write_cfg, &dev_config->mspi_nor_cfg,
@@ -760,9 +766,42 @@ static int api_ex_op(const struct device *dev, uint16_t code,
 			dev_data->last_applied_cfg = NULL;
 		}
 		dev_data->write_cfg = &dev_data->mspi_dev_write_cfg;
-	} else {
+		break;
+	case FLASH_MSPI_NOR_EX_OP_SET_RX_DUMMY:
 		dev_data->rx_dummy_override = (uint8_t)in;
 		dev_data->rx_dummy_overridden = true;
+		break;
+	case FLASH_MSPI_NOR_EX_OP_SET_SINGLE_IO:
+		if (dev_data->cmd_info.uses_4byte_addr) {
+			dev_data->cmd_info.read_cmd = SPI_NOR_CMD_READ_FAST_4B;
+			dev_data->cmd_info.pp_cmd = SPI_NOR_CMD_PP_4B;
+		} else {
+			dev_data->cmd_info.read_cmd = SPI_NOR_CMD_READ_FAST;
+			dev_data->cmd_info.pp_cmd = SPI_NOR_CMD_PP;
+		}
+		dev_data->cmd_info.read_mode_bit_cycles = 0;
+		dev_data->cmd_info.read_dummy_cycles = 8;
+		/* Fast Read dummy cycles, overriding any rx-dummy property */
+		dev_data->rx_dummy_override = 8;
+		dev_data->rx_dummy_overridden = true;
+
+		memcpy(&dev_data->mspi_dev_read_cfg, &dev_config->mspi_nor_cfg,
+		       sizeof(dev_config->mspi_nor_cfg));
+		dev_data->mspi_dev_read_cfg.io_mode = MSPI_IO_MODE_SINGLE;
+		dev_data->mspi_dev_read_cfg.freq = dev_config->read_freq;
+		dev_data->read_cfg = &dev_data->mspi_dev_read_cfg;
+
+		memcpy(&dev_data->mspi_dev_write_cfg, &dev_config->mspi_nor_cfg,
+		       sizeof(dev_config->mspi_nor_cfg));
+		dev_data->mspi_dev_write_cfg.io_mode = MSPI_IO_MODE_SINGLE;
+		dev_data->mspi_dev_write_cfg.freq = dev_config->write_freq;
+		dev_data->write_cfg = &dev_data->mspi_dev_write_cfg;
+
+		/* Force perform_xfer() to re-apply the IO configs */
+		dev_data->last_applied_cfg = NULL;
+		break;
+	default:
+		break;
 	}
 
 	release(dev);
