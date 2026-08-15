@@ -112,6 +112,8 @@
 #define SPI_CTRLR0_INST_L16			3UL
 #define SPI_CTRLR0_XIP_MD_BIT_EN_BIT		BIT(7)
 #define SPI_CTRLR0_ADDR_L_MASK			GENMASK(5, 2)
+/* ADDR_L counts 4-bit units, so this is 60 bits of address phase. */
+#define SPI_CTRLR0_ADDR_L_MAX			BIT_MASK(4)
 #define SPI_CTRLR0_TRANS_TYPE_MASK		GENMASK(1, 0)
 #define SPI_CTRLR0_TRANS_TYPE_TT0		0UL
 #define SPI_CTRLR0_TRANS_TYPE_TT1		1UL

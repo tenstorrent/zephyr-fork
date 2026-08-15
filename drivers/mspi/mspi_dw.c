@@ -62,6 +62,8 @@ struct mspi_dw_data {
 	uint32_t dummy_bytes;
 	uint8_t bytes_to_discard;
 	uint8_t bytes_per_frame_exp;
+	/* Number of lines the address phase is transferred on. */
+	uint8_t addr_lines;
 	bool standard_spi;
 	bool suspended;
 
@@ -605,6 +607,7 @@ static bool apply_io_mode(struct mspi_dw_data *dev_data,
 		dev_data->ctrlr0 |= FIELD_PREP(CTRLR0_SPI_FRF_MASK,
 					       CTRLR0_SPI_FRF_STANDARD);
 		dev_data->standard_spi = true;
+		dev_data->addr_lines = 1;
 		return true;
 	}
 
@@ -660,6 +663,27 @@ static bool apply_io_mode(struct mspi_dw_data *dev_data,
 		break;
 	}
 
+	/* Number of lines used for the address phase. */
+
+	switch (io_mode) {
+	case MSPI_IO_MODE_DUAL_1_1_2:
+	case MSPI_IO_MODE_QUAD_1_1_4:
+	case MSPI_IO_MODE_OCTAL_1_1_8:
+		dev_data->addr_lines = 1;
+		break;
+	case MSPI_IO_MODE_DUAL:
+	case MSPI_IO_MODE_DUAL_1_2_2:
+		dev_data->addr_lines = 2;
+		break;
+	case MSPI_IO_MODE_QUAD:
+	case MSPI_IO_MODE_QUAD_1_4_4:
+		dev_data->addr_lines = 4;
+		break;
+	default:
+		dev_data->addr_lines = 8;
+		break;
+	}
+
 	return true;
 }
 
@@ -688,17 +712,46 @@ static bool apply_cmd_length(struct mspi_dw_data *dev_data, uint32_t cmd_length)
 	return true;
 }
 
-static bool apply_addr_length(struct mspi_dw_data *dev_data,
-			      uint32_t addr_length)
+/* Number of bits the address phase transfers in one clock cycle. Mode bits
+ * are appended to the address, so they are sent at the same rate.
+ */
+static uint8_t addr_bits_per_cycle(const struct mspi_dw_data *dev_data)
 {
+	return dev_data->addr_lines *
+	       ((dev_data->spi_ctrlr0 & SPI_CTRLR0_SPI_DDR_EN_BIT) ? 2 : 1);
+}
+
+/* Total width of the address phase: the address itself plus any mode bits
+ * appended to it. The controller tri-states its outputs for the whole wait
+ * cycle window, so mode bits can only be driven as part of the address.
+ */
+static uint32_t addr_phase_bits(const struct mspi_dw_data *dev_data,
+				uint32_t addr_length, uint8_t mode_bit_cycles)
+{
+	return addr_length * 8 + mode_bit_cycles * addr_bits_per_cycle(dev_data);
+}
+
+static bool apply_addr_length(struct mspi_dw_data *dev_data,
+			      uint32_t addr_length, uint8_t mode_bit_cycles)
+{
+	uint32_t addr_bits;
+
 	if (addr_length > 4) {
 		LOG_ERR("Address length %u not supported", addr_length);
 		return false;
 	}
 
+	addr_bits = addr_phase_bits(dev_data, addr_length, mode_bit_cycles);
+
+	if (addr_bits % 4 || addr_bits > SPI_CTRLR0_ADDR_L_MAX * 4) {
+		LOG_ERR("Address length %u with %u mode bit cycles not supported",
+			addr_length, mode_bit_cycles);
+		return false;
+	}
+
 	dev_data->spi_ctrlr0 &= ~SPI_CTRLR0_ADDR_L_MASK;
 	dev_data->spi_ctrlr0 |= FIELD_PREP(SPI_CTRLR0_ADDR_L_MASK,
-					   addr_length * 2);
+					   addr_bits / 4);
 
 	return true;
 }
@@ -1088,6 +1141,30 @@ static void tx_control_field(const struct device *dev,
 	} while (shift);
 }
 
+/* Write the address phase in an enhanced SPI mode, with any mode bits
+ * appended to the address. An address phase wider than 32 bits is taken
+ * from two FIFO entries: the most significant 32 bits first, then the
+ * remaining bits right-justified.
+ */
+static void tx_addr_phase(const struct device *dev, uint32_t address)
+{
+	struct mspi_dw_data *dev_data = dev->data;
+	uint8_t mode_width = dev_data->xfer.mode_bit_cycles *
+			     addr_bits_per_cycle(dev_data);
+	uint32_t addr_bits = addr_phase_bits(dev_data,
+					     dev_data->xfer.addr_length,
+					     dev_data->xfer.mode_bit_cycles);
+	uint64_t field = ((uint64_t)address << mode_width) |
+			 (dev_data->xfer.mode_bits & BIT_MASK(mode_width));
+
+	if (addr_bits > 32) {
+		write_dr(dev, (uint32_t)(field >> (addr_bits - 32)));
+		write_dr(dev, (uint32_t)field & BIT_MASK(addr_bits - 32));
+	} else {
+		write_dr(dev, (uint32_t)field);
+	}
+}
+
 static int start_next_packet(const struct device *dev)
 {
 	const struct mspi_dw_config *dev_config = dev->config;
@@ -1152,7 +1229,7 @@ static int start_next_packet(const struct device *dev)
 			--data_frames;
 		}
 
-		if (!apply_addr_length(dev_data, addr_length)) {
+		if (!apply_addr_length(dev_data, addr_length, 0)) {
 			return -EINVAL;
 		}
 	}
@@ -1345,7 +1422,10 @@ static int start_next_packet(const struct device *dev)
 				if (dev_data->standard_spi) {
 					total_tx_entries += dev_data->xfer.addr_length;
 				} else {
-					total_tx_entries += 1;
+					total_tx_entries += addr_phase_bits(dev_data,
+						dev_data->xfer.addr_length,
+						dev_data->xfer.mode_bit_cycles) > 32
+						? 2 : 1;
 				}
 			}
 
@@ -1378,7 +1458,7 @@ static int start_next_packet(const struct device *dev)
 			}
 
 			if (dev_data->xfer.addr_length) {
-				write_dr(dev, packet->address);
+				tx_addr_phase(dev, packet->address);
 			}
 		}
 
@@ -1516,6 +1596,33 @@ static int _api_transceive(const struct device *dev,
 		return -EINVAL;
 	}
 
+	if (req->mode_bit_cycles) {
+		uint32_t mode_width = req->mode_bit_cycles *
+				      addr_bits_per_cycle(dev_data);
+
+		/* Mode bits ride along with the address, so there has to be
+		 * one, and the controller has to be able to send it in an
+		 * enhanced SPI mode.
+		 */
+		if (dev_data->standard_spi || req->addr_length == 0) {
+			LOG_ERR("Mode bits require an address in an enhanced SPI mode");
+			return -EINVAL;
+		}
+
+		if (IS_ENABLED(CONFIG_MSPI_DMA) && req->xfer_mode == MSPI_DMA) {
+			LOG_ERR("Mode bits unsupported in DMA mode");
+			return -ENOTSUP;
+		}
+
+		/* Wider mode fields have no established meaning for the
+		 * single byte the API carries.
+		 */
+		if (mode_width == 0 || mode_width > 8) {
+			LOG_ERR("Unsupported mode bit width (%u)", mode_width);
+			return -EINVAL;
+		}
+	}
+
 	/* In PIO mode, the SPI_CTRLR0 register is intended for enhanced SPI modes only,
 	 * however some implementations continue to process the INST_L and ADDR_L
 	 * fields in standard mode. On those platforms the controller sends its own
@@ -1529,7 +1636,8 @@ static int _api_transceive(const struct device *dev,
 				     &  ~SPI_CTRLR0_ADDR_L_MASK;
 	} else {
 		if (!apply_cmd_length(dev_data, req->cmd_length) ||
-		    !apply_addr_length(dev_data, req->addr_length)) {
+		    !apply_addr_length(dev_data, req->addr_length,
+				       req->mode_bit_cycles)) {
 			return -EINVAL;
 		}
 	}
