@@ -40,6 +40,15 @@ extern "C" {
 #define ENTER_4BYTE_ADDR_B7    1
 #define ENTER_4BYTE_ADDR_06_B7 2
 
+/* Cycles between the address and the data of a read. Datasheets usually
+ * fold the mode bit cycles into the dummy cycle count they quote; they are
+ * counted separately here so that they are driven rather than left floating.
+ */
+struct flash_mspi_nor_read_latency {
+	uint8_t mode_bit_cycles;
+	uint8_t dummy_cycles;
+};
+
 struct flash_mspi_nor_cmd_info {
 	uint8_t read_cmd;
 	uint8_t read_mode_bit_cycles : 3;
