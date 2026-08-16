@@ -372,13 +372,7 @@ const struct jesd216_erase_type *dev_erase_types(const struct device *dev)
 
 static uint8_t get_rx_dummy(const struct device *dev)
 {
-	const struct flash_mspi_nor_config *dev_config = dev->config;
 	struct flash_mspi_nor_data *dev_data = dev->data;
-
-	/* If the number of RX dummy cycles is specified in dts, use that value. */
-	if (dev_config->rx_dummy_specified) {
-		return dev_config->mspi_nor_cfg.rx_dummy;
-	}
 
 	/* Since it's not yet possible to specify mode bits with MSPI API,
 	 * treat mode bit cycles as just dummy.
@@ -1566,7 +1560,6 @@ BUILD_ASSERT((FLASH_SIZE_INST(inst) % CONFIG_FLASH_MSPI_NOR_LAYOUT_PAGE_SIZE) ==
 		.write_io_mode = DT_INST_ENUM_IDX_OR(inst, write_io_mode,	\
 			DT_INST_ENUM_IDX(inst, mspi_io_mode)),			\
 		.jedec_id_specified = DT_INST_NODE_HAS_PROP(inst, jedec_id),    \
-		.rx_dummy_specified = DT_INST_NODE_HAS_PROP(inst, rx_dummy),    \
 		.multiperipheral_bus = DT_PROP(DT_INST_BUS(inst),		\
 					       software_multiperipheral),	\
 		IO_MODE_FLAGS(DT_INST_ENUM_IDX(inst, mspi_io_mode)),		\

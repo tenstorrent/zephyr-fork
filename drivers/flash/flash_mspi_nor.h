@@ -109,7 +109,6 @@ struct flash_mspi_nor_config {
 	uint32_t write_freq;
 	enum mspi_io_mode write_io_mode;
 	bool jedec_id_specified  : 1;
-	bool rx_dummy_specified  : 1;
 	bool multiperipheral_bus : 1;
 	bool multi_io_cmd        : 1;
 	bool single_io_addr      : 1;

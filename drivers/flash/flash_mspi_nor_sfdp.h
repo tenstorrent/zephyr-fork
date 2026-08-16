@@ -382,7 +382,7 @@
 		  ? SPI_NOR_CMD_READ_FAST_4B \
 		  : SPI_NOR_CMD_READ_FAST, \
 	.read_mode_bit_cycles = 0, \
-	.read_dummy_cycles = 8, \
+	.read_dummy_cycles = DT_INST_PROP_OR(inst, rx_dummy, 8), \
 	.uses_4byte_addr = USES_4BYTE_ADDR(inst), \
 	.cmd_extension = CMD_EXTENSION_NONE, \
 	.sfdp_addr_4 = false, \
