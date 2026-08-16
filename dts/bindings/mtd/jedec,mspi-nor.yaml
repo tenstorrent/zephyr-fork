@@ -22,6 +22,23 @@ include:
       - t-reset-recovery
 
 properties:
+  rx-mode-cycles:
+    type: int
+    description: |
+      The number of clock cycles carrying mode bits (also known as
+      performance enhance or XIP confirmation bits) between the address
+      and the RX dummy cycles of the read command.
+
+      Datasheets usually fold these cycles into the dummy cycle count they
+      quote, but unlike dummy cycles they are driven by the controller, so
+      they have to be counted separately here. When a chip takes mode bits
+      and this property is left out, `rx-dummy` needs to cover them as well
+      and the flash will sample them off an undriven bus.
+
+      Only needed when the read command is specified through `read-command`
+      or defaulted to, as SFDP describes the split for the commands it
+      reports.
+
   read-frequency:
     type: int
     description: |

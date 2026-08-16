@@ -175,7 +175,7 @@
 	.read_cmd = USES_4BYTE_ADDR(inst) && HAS_4BYTE_ADDR_CMDS(inst) \
 		  ? SFDP_CMD_FAST_READ_4B(inst) \
 		  : SFDP_CMD_FAST_READ(inst), \
-	.read_mode_bit_cycles = \
+	.read_mode_bit_cycles = DT_INST_PROP_OR(inst, rx_mode_cycles, \
 		USES_1S_8S_8S(inst) ? SFDP_FIELD(inst, sfdp_bfp, 17, GENMASK(7, 5)) : \
 		USES_1S_1S_8S(inst) ? SFDP_FIELD(inst, sfdp_bfp, 17, GENMASK(23, 21)) : \
 		USES_4S_4D_4D(inst) ? SFDP_FIELD(inst, sfdp_bfp, 23, GENMASK(23, 21)) : \
@@ -189,7 +189,7 @@
 		USES_1S_1S_2S(inst) ? SFDP_FIELD(inst, sfdp_bfp, 4, GENMASK(7, 5)) : \
 		USES_1S_1D_1D(inst) ? SFDP_FIELD(inst, sfdp_bfp, 22, GENMASK(7, 5)) : \
 		USES_1S_1S_1S(inst) ? 0 : \
-		0, \
+		0), \
 	.read_dummy_cycles = DT_INST_PROP_OR(inst, rx_dummy, \
 		USES_8D_8D_8D(inst) ? SFDP_FIELD(inst, sfdp_ff05, 6, GENMASK(4, 0)) : \
 		USES_8S_8S_8S(inst) ? SFDP_FIELD(inst, sfdp_ff05, 6, GENMASK(9, 5)) : \
@@ -381,7 +381,7 @@
 	.read_cmd = USES_4BYTE_ADDR(inst) \
 		  ? SPI_NOR_CMD_READ_FAST_4B \
 		  : SPI_NOR_CMD_READ_FAST, \
-	.read_mode_bit_cycles = 0, \
+	.read_mode_bit_cycles = DT_INST_PROP_OR(inst, rx_mode_cycles, 0), \
 	.read_dummy_cycles = DT_INST_PROP_OR(inst, rx_dummy, 8), \
 	.uses_4byte_addr = USES_4BYTE_ADDR(inst), \
 	.cmd_extension = CMD_EXTENSION_NONE, \
