@@ -408,6 +408,14 @@ struct mspi_xfer {
 	uint16_t                    tx_dummy;
 	/** @brief  Configure RX dummy cycles    */
 	uint16_t                    rx_dummy;
+	/** @brief  Number of clock cycles carrying mode bits (also known as
+	 * performance enhance or XIP confirmation bits) between the address
+	 * and the RX dummy cycles. Unlike dummy cycles, these are driven by
+	 * the controller.
+	 */
+	uint8_t                     mode_bit_cycles;
+	/** @brief  Value to drive during the mode bit cycles, right-justified */
+	uint8_t                     mode_bits;
 	/** @brief  Configure command length     */
 	uint8_t                     cmd_length;
 	/** @brief  Configure address length     */

@@ -33,6 +33,13 @@ LOG_MODULE_REGISTER(flash_mspi_nor, CONFIG_FLASH_LOG_LEVEL);
 #define NON_XIP_DEV_CFG_MASK ((MSPI_DEVICE_CONFIG_ALL & ~XIP_DEV_CFG_MASK) | \
 			      MSPI_DEVICE_CONFIG_IO_MODE)
 
+/* Value driven during the mode bit cycles of a read. All families that
+ * define these bits treat it as "no continuous read": M5-4 != (1,0) for
+ * Winbond and GigaDevice, a non-toggling P7-4/P3-0 for Macronix, and a
+ * terminating XIP confirmation bit for Micron.
+ */
+#define READ_MODE_BITS 0xFF
+
 static void set_up_xfer(const struct device *dev, enum mspi_xfer_direction dir,
 			enum mspi_xfer_mode xfer_mode);
 static void set_up_xfer_with_addr(const struct device *dev,
@@ -428,16 +435,32 @@ static int validate_erase_block_size(const struct device *dev)
 	return 0;
 }
 
-static uint8_t get_rx_dummy(const struct device *dev)
+/* Cycles between the address and the data of a read, split into the mode
+ * bit cycles the controller drives and the dummy cycles it does not.
+ */
+static struct flash_mspi_nor_read_latency get_read_latency(
+	const struct device *dev)
 {
 	struct flash_mspi_nor_data *dev_data = dev->data;
 
-	/* Since it's not yet possible to specify mode bits with MSPI API,
-	 * treat mode bit cycles as just dummy.
-	 */
-	return dev_data->cmd_info.read_mode_bit_cycles +
-	       dev_data->cmd_info.read_dummy_cycles;
+	return (struct flash_mspi_nor_read_latency){
+		.mode_bit_cycles = dev_data->cmd_info.read_mode_bit_cycles,
+		.dummy_cycles = dev_data->cmd_info.read_dummy_cycles,
+	};
 }
+
+#if defined(CONFIG_MSPI_MEMMAP)
+/* Total cycles between address and data. Memory-mapped reads take their
+ * address from the bus rather than from the FIFO, so there is no way to
+ * append mode bits to it; they have to pass as dummy cycles.
+ */
+static uint8_t get_rx_dummy(const struct device *dev)
+{
+	struct flash_mspi_nor_read_latency latency = get_read_latency(dev);
+
+	return latency.mode_bit_cycles + latency.dummy_cycles;
+}
+#endif
 
 static int api_read(const struct device *dev, off_t addr, void *dest,
 		    size_t size)
@@ -445,6 +468,7 @@ static int api_read(const struct device *dev, off_t addr, void *dest,
 	const struct flash_mspi_nor_config *dev_config = dev->config;
 	struct flash_mspi_nor_data *dev_data = dev->data;
 	const uint32_t flash_size = dev_flash_size(dev);
+	struct flash_mspi_nor_read_latency latency;
 	int rc;
 
 	if (size == 0) {
@@ -460,6 +484,8 @@ static int api_read(const struct device *dev, off_t addr, void *dest,
 		return rc;
 	}
 
+	latency = get_read_latency(dev);
+
 	while (size > 0) {
 		uint32_t to_read;
 
@@ -471,7 +497,9 @@ static int api_read(const struct device *dev, off_t addr, void *dest,
 		}
 
 		set_up_xfer_with_addr(dev, MSPI_RX, addr, dev_config->data_xfer_mode);
-		dev_data->xfer.rx_dummy = get_rx_dummy(dev);
+		dev_data->xfer.rx_dummy        = latency.dummy_cycles;
+		dev_data->xfer.mode_bit_cycles = latency.mode_bit_cycles;
+		dev_data->xfer.mode_bits       = READ_MODE_BITS;
 		dev_data->packet.data_buf  = dest;
 		dev_data->packet.num_bytes = to_read;
 		rc = perform_xfer(dev, dev_data->cmd_info.read_cmd);
