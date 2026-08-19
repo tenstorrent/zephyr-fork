@@ -54,6 +54,7 @@ BOOT_UPGRADE_ONLY
 BOOT_VALIDATE_SLOT0  # Used in (sysbuild-based) test
 BOOT_WATCHDOG_FEED  # Used in (sysbuild-based) test
 BT_6LOWPAN  # Defined in Linux, mentioned in docs
+CC_VERSION_TEXT  # Defined in Linux, read from the host kernel config
 CDC_ACM_PORT_NAME_
 CHRE  # Optional module
 CHRE_LOG_LEVEL_DBG  # Optional module
