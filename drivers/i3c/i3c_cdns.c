@@ -773,11 +773,12 @@ static inline void cdns_i3c_interrupts_clear(const struct cdns_i3c_config *confi
 static void cdns_i3c_write_tx_fifo(const struct cdns_i3c_config *config, const void *buf,
 				   uint32_t len)
 {
-	const uint32_t *ptr = buf;
+	const uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
-		val = *ptr++;
+		val = UNALIGNED_GET((const uint32_t *)ptr);
+		ptr += 4;
 		sys_write32(val, config->base + TX_FIFO);
 	}
 
@@ -792,11 +793,12 @@ static void cdns_i3c_write_tx_fifo(const struct cdns_i3c_config *config, const v
 static void cdns_i3c_write_ddr_tx_fifo(const struct cdns_i3c_config *config, const void *buf,
 				       uint32_t len)
 {
-	const uint32_t *ptr = buf;
+	const uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
-		val = *ptr++;
+		val = UNALIGNED_GET((const uint32_t *)ptr);
+		ptr += 4;
 		sys_write32(val, config->base + SLV_DDR_TX_FIFO);
 	}
 
@@ -813,11 +815,12 @@ static void cdns_i3c_write_ddr_tx_fifo(const struct cdns_i3c_config *config, con
 static void cdns_i3c_write_ibi_fifo(const struct cdns_i3c_config *config, const void *buf,
 				    uint32_t len)
 {
-	const uint32_t *ptr = buf;
+	const uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
-		val = *ptr++;
+		val = UNALIGNED_GET((const uint32_t *)ptr);
+		ptr += 4;
 		sys_write32(val, config->base + IBI_DATA_FIFO);
 	}
 
@@ -868,7 +871,7 @@ static void cdns_i3c_target_read_rx_fifo(const struct device *dev)
 #ifdef CONFIG_I3C_CONTROLLER
 static int cdns_i3c_read_rx_fifo(const struct cdns_i3c_config *config, void *buf, uint32_t len)
 {
-	uint32_t *ptr = buf;
+	uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
@@ -876,7 +879,8 @@ static int cdns_i3c_read_rx_fifo(const struct cdns_i3c_config *config, void *buf
 			return -EIO;
 		}
 		val = sys_le32_to_cpu(sys_read32(config->base + RX_FIFO));
-		*ptr++ = val;
+		memcpy(ptr, &val, sizeof(val));
+		ptr += sizeof(val);
 	}
 
 	if (remain > 0) {
@@ -893,7 +897,7 @@ static int cdns_i3c_read_rx_fifo(const struct cdns_i3c_config *config, void *buf
 static int cdns_i3c_read_rx_fifo_ddr_xfer(const struct cdns_i3c_config *config, void *buf,
 					  uint32_t len, uint32_t ddr_header)
 {
-	uint16_t *ptr = buf;
+	uint8_t *ptr = buf;
 	uint32_t val;
 	uint32_t preamble;
 	uint8_t crc5 = 0x1F;
@@ -913,7 +917,10 @@ static int cdns_i3c_read_rx_fifo_ddr_xfer(const struct cdns_i3c_config *config, 
 
 		if (preamble == DDR_PREAMBLE_DATA_ABORT ||
 		    preamble == DDR_PREAMBLE_DATA_ABORT_ALT) {
-			*ptr++ = sys_cpu_to_be16((uint16_t)DDR_DATA(val));
+			uint16_t data = sys_cpu_to_be16((uint16_t)DDR_DATA(val));
+
+			memcpy(ptr, &data, sizeof(data));
+			ptr += sizeof(data);
 			crc5 = i3c_cdns_crc5(crc5, (uint16_t)DDR_DATA(val));
 		} else if ((preamble == DDR_PREAMBLE_CMD_CRC) &&
 			   ((val & DDR_CRC_TOKEN_MASK) == DDR_CRC_TOKEN)) {
@@ -1894,7 +1901,7 @@ static int cdns_i3c_do_daa(const struct device *dev)
 						 * write all known values
 						 */
 						*(const struct device **)&target->bus = dev;
-						*(uint64_t *)&target->pid = pid;
+						memcpy(&target->pid, &pid, sizeof(target->pid));
 						target->dynamic_addr = dyn_addr;
 						target->bcr = bcr;
 						target->dcr = dcr;
@@ -2877,7 +2884,7 @@ static int cdns_i3c_transfer_cb(const struct device *dev, struct i3c_device_desc
 #ifdef CONFIG_I3C_CONTROLLER
 static int cdns_i3c_read_ibi_fifo(const struct cdns_i3c_config *config, void *buf, uint32_t len)
 {
-	uint32_t *ptr = buf;
+	uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
@@ -2885,7 +2892,8 @@ static int cdns_i3c_read_ibi_fifo(const struct cdns_i3c_config *config, void *bu
 			return -EIO;
 		}
 		val = sys_le32_to_cpu(sys_read32(config->base + IBI_DATA_FIFO));
-		*ptr++ = val;
+		memcpy(ptr, &val, sizeof(val));
+		ptr += sizeof(val);
 	}
 
 	if (remain > 0) {
@@ -3139,9 +3147,10 @@ static void cdns_i3c_irq_handler(const struct device *dev)
 #ifdef CONFIG_I3C_USE_IBI
 		/* pop data out of the IBI FIFO */
 		while (!cdns_i3c_ibi_fifo_empty(config)) {
-			uint32_t *ptr =
-				(uint32_t *)&data->ibi_buf.ibi_data[data->ibi_buf.ibi_data_cnt];
-			*ptr = sys_le32_to_cpu(sys_read32(config->base + IBI_DATA_FIFO));
+			uint32_t val = sys_le32_to_cpu(sys_read32(config->base + IBI_DATA_FIFO));
+
+			memcpy(&data->ibi_buf.ibi_data[data->ibi_buf.ibi_data_cnt], &val,
+			       sizeof(val));
 			data->ibi_buf.ibi_data_cnt += 4;
 		}
 #else
@@ -3551,7 +3560,6 @@ static int cdns_i3c_target_tx_write(const struct device *dev, uint8_t *buf, uint
 	const struct cdns_i3c_config *config = dev->config;
 	struct cdns_i3c_data *data = dev->data;
 	struct i3c_config_controller *ctrl_config = &data->common.ctrl_config;
-	const uint32_t *buf_32 = (uint32_t *)buf;
 	uint32_t i = 0;
 	uint32_t val = 0;
 	uint16_t remain = len;
@@ -3593,13 +3601,14 @@ static int cdns_i3c_target_tx_write(const struct device *dev, uint8_t *buf, uint
 			if (REV_ID_REV(data->hw_cfg.rev_id) >= REV_ID_VERSION(1, 7)) {
 				remain = len - i;
 				if (remain >= 4) {
-					val = *buf_32++;
+					val = UNALIGNED_GET((const uint32_t *)&buf[i]);
+					i += sizeof(uint32_t);
 				} else if (remain > 0) {
 					val = 0;
-					memcpy(&val, buf_32, remain);
+					memcpy(&val, &buf[i], remain);
+					i += remain;
 				}
 				sys_write32(val, config->base + TX_FIFO);
-				i += 4;
 			} else {
 				sys_write32((uint32_t)buf[i], config->base + TX_FIFO);
 				i++;
