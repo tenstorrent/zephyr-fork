@@ -1299,7 +1299,7 @@ static int flash_chip_init(const struct device *dev)
 		}
 
 		if (memcmp(id, dev_config->jedec_id, sizeof(id)) != 0) {
-			LOG_ERR("JEDEC ID mismatch, read: %02x %02x %02x, "
+			LOG_DBG("JEDEC ID mismatch, read: %02x %02x %02x, "
 				"expected: %02x %02x %02x",
 				id[0], id[1], id[2],
 				dev_config->jedec_id[0],
