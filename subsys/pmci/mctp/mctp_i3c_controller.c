@@ -11,14 +11,23 @@
 #include <zephyr/kernel.h>
 #include <zephyr/pmci/mctp/mctp_i3c_controller.h>
 #include <zephyr/pmci/mctp/mctp_i3c_endpoint.h>
-
+#include <zephyr/pmci/mctp/mctp_i3c_pec.h>
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(mctp_i3c_controller, CONFIG_MCTP_LOG_LEVEL);
 
 static inline void mctp_i3c_recv_msg(struct mctp_binding_i3c_controller *binding,
 				     size_t endpoint_idx)
 {
-	uint8_t rx_buf[256];
+	/* +1 to accommodate the trailing PEC byte */
+	uint8_t rx_buf[MCTP_I3C_MAX_PKT_SIZE + I3C_PROTOCOL_PEC_SZ];
+	int rc;
+	struct mctp_pktbuf *pkt;
+	struct i3c_device_desc *dev = binding->endpoint_i3c_devs[endpoint_idx];
+
+	if (dev == NULL) {
+		LOG_ERR("No device descriptor for endpoint %d", endpoint_idx);
+		return;
+	}
 
 	/* Callback already done *in a work queue* dedicated to i3c but is shared
 	 * among all i3c buses. Likely only one per device anyways since its a
@@ -30,12 +39,15 @@ static inline void mctp_i3c_recv_msg(struct mctp_binding_i3c_controller *binding
 		.flags = I3C_MSG_READ | I3C_MSG_STOP,
 	};
 
-	int rc = i3c_transfer(binding->endpoint_i3c_devs[endpoint_idx], &msg, 1);
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE
+	msg.flags |= I3C_MSG_NOACK_EXPECTED;
+#endif /* CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE */
 
+	rc = i3c_transfer(dev, &msg, 1);
 	if (rc != 0) {
-#ifdef CONFIG_I3C_USE_IBI
-		LOG_ERR("Error requesting read from endpoint %d: %d", endpoint_idx, rc);
-#endif /*CONFIG_I3C_USE_IBI*/
+		if (rc != -ENODATA) {
+			LOG_ERR("Error requesting read from endpoint %d: %d", endpoint_idx, rc);
+		}
 		return;
 	}
 
@@ -45,21 +57,33 @@ static inline void mctp_i3c_recv_msg(struct mctp_binding_i3c_controller *binding
 
 	LOG_DBG("Read %d bytes from endpoint %d", msg.num_xfer, endpoint_idx);
 
-	struct mctp_pktbuf *pkt = mctp_pktbuf_alloc(&binding->binding, msg.num_xfer);
+	/* PEC verification as per DSP0233 1.0.0: CRC-8 seeded with the address byte
+	 * (dynamic_addr << 1 | R/W), computed over all received bytes except PEC.
+	 */
+	uint8_t addr_byte = (dev->dynamic_addr << 1U) | 1U;
 
+	if (mctp_i3c_verify_pec(rx_buf, msg.num_xfer, addr_byte) != 0) {
+		return;
+	}
+
+	/* Strip the trailing PEC byte before handing to libmctp */
+	size_t payload_len = msg.num_xfer - I3C_PROTOCOL_PEC_SZ;
+
+	pkt = mctp_pktbuf_alloc(&binding->binding, payload_len);
 	if (pkt == NULL) {
 		LOG_ERR("Out of memory to allocate buffer when receiving message from endpoint %d",
 			endpoint_idx);
 		return;
 	}
 
-	memcpy(pkt->data, msg.buf, msg.num_xfer);
+	LOG_DBG("Read %zu bytes from endpoint %d (PEC ok)", payload_len, endpoint_idx);
+	memcpy(pkt->data, rx_buf, payload_len);
 
 	mctp_bus_rx(&binding->binding, pkt);
 	mctp_pktbuf_free(pkt);
 }
 
-#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE
 
 static void mctp_i3c_poll_work_handler(struct k_work *work)
 {
@@ -75,7 +99,7 @@ static void mctp_i3c_poll_work_handler(struct k_work *work)
 }
 #endif
 
-#ifdef CONFIG_I3C_USE_IBI
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_IBI_MODE
 int mctp_i3c_ibi_cb(struct i3c_device_desc *target,
 		    struct i3c_ibi_payload *payload)
 {
@@ -116,11 +140,17 @@ int mctp_i3c_ibi_cb(struct i3c_device_desc *target,
 
 int mctp_i3c_controller_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 {
-	/* Which i2c device am I sending this to? */
+	/* Which i3c device am I sending this to? */
 	struct mctp_hdr *hdr = mctp_pktbuf_hdr(pkt);
 	struct mctp_binding_i3c_controller *b =
 		CONTAINER_OF(binding, struct mctp_binding_i3c_controller, binding);
-	uint8_t pktsize = pkt->end - pkt->start;
+	uint8_t tx_buf[MCTP_PACKET_SIZE(MCTP_I3C_MAX_PKT_SIZE) + I3C_PROTOCOL_PEC_SZ];
+
+	/* pkt->end - pkt->start spans the 4-byte MCTP header plus payload,
+	 * so max size is MCTP_I3C_MAX_PKT_SIZE + sizeof(struct mctp_hdr).
+	 * Use size_t to avoid uint8_t overflow at 259 bytes.
+	 */
+	size_t pktsize = pkt->end - pkt->start;
 	int endpoint_idx = -1;
 
 	for (int i = 0; i < b->num_endpoints; i++) {
@@ -130,15 +160,36 @@ int mctp_i3c_controller_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt
 		}
 	}
 
+	/* MCTP_EID_NULL (0) is used for pre-assignment discovery commands
+	 * (e.g. Get Endpoint ID). Route to the first available endpoint.
+	 */
+	if (endpoint_idx == -1 && hdr->dest == MCTP_EID_NULL && b->num_endpoints > 0) {
+		endpoint_idx = 0;
+	}
+
 	if (endpoint_idx == -1) {
 		LOG_ERR("Invalid endpoint id %d when sending message", hdr->dest);
 		return 0;
 	}
 
+	/* PEC (DSP0233 1.0.0): CRC-8 seeded with the address byte
+	 * (dynamic_addr << 1 | W), computed over the packet data.
+	 * Copy data + PEC into a local buffer to send in a single transfer.
+	 */
+	if (pktsize > MCTP_PACKET_SIZE(MCTP_I3C_MAX_PKT_SIZE)) {
+		LOG_ERR("Packet too large to send: %zu bytes", pktsize);
+		return 0;
+	}
+
+	uint8_t addr_byte = b->endpoint_i3c_devs[endpoint_idx]->dynamic_addr << 1U;
+
+	memcpy(tx_buf, &pkt->data[pkt->start], pktsize);
+	tx_buf[pktsize] = mctp_i3c_calculate_pec(tx_buf, pktsize, addr_byte);
+
 	struct i3c_msg msg = {
-		.buf = &pkt->data[pkt->start],
-		.len = pktsize,
-		.flags = I3C_MSG_WRITE | I3C_MSG_STOP,
+		.buf = tx_buf,
+		.len = pktsize + I3C_PROTOCOL_PEC_SZ,
+		.flags = I3C_MSG_WRITE | I3C_MSG_NBCH | I3C_MSG_STOP,
 	};
 
 	int rc = i3c_transfer(b->endpoint_i3c_devs[endpoint_idx], &msg, 1);
@@ -160,7 +211,7 @@ int mctp_i3c_controller_start(struct mctp_binding *binding)
 	for (int i = 0; i < b->num_endpoints; i++) {
 		mctp_i3c_endpoint_bind(b->devices[i], b, &b->endpoint_i3c_devs[i]);
 
-#ifdef CONFIG_I3C_USE_IBI
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_IBI_MODE
 		int rc;
 
 		LOG_INF("Enabling IBI for TARGET %p PID %llx BCR %x",
@@ -186,7 +237,7 @@ int mctp_i3c_controller_start(struct mctp_binding *binding)
 #endif
 	}
 
-#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE
 	k_work_init_delayable(&b->poll_work, mctp_i3c_poll_work_handler);
 	(void)k_work_schedule(&b->poll_work, K_NO_WAIT);
 #endif

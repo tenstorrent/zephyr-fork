@@ -5,8 +5,14 @@
  *
  */
 
-#ifndef ZEPHYR_MCTP_I3C_CONTROLLER_H_
-#define ZEPHYR_MCTP_I3C_CONTROLLER_H_
+/**
+ * @file
+ * @brief MCTP bus binding over I3C using IBI signaling, controller side.
+ * @ingroup mctp
+ */
+
+#ifndef ZEPHYR_INCLUDE_PMCI_MCTP_MCTP_I3C_CONTROLLER_H_
+#define ZEPHYR_INCLUDE_PMCI_MCTP_MCTP_I3C_CONTROLLER_H_
 
 #include <stdint.h>
 #include <zephyr/kernel.h>
@@ -29,7 +35,7 @@ struct mctp_binding_i3c_controller {
 	size_t rx_buf_len;
 	uint8_t *rx_buf;
 	uint8_t tx_storage[MCTP_PKTBUF_SIZE(MCTP_I3C_MAX_PKT_SIZE)] PKTBUF_STORAGE_ALIGN;
-#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING
+#ifdef CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE
 	struct k_work_delayable poll_work;
 	k_timeout_t poll_interval;
 #endif
@@ -81,9 +87,9 @@ int mctp_i3c_controller_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt
 		.devices = _name##_endpoints,							\
 		.endpoint_ids = _name##_endpoint_ids,						\
 		.endpoint_i3c_devs = _name##_endpoint_i3c_devs,					\
-		COND_CODE_1(CONFIG_MCTP_I3C_CONTROLLER_POLLING,					\
+		COND_CODE_1(CONFIG_MCTP_I3C_CONTROLLER_POLLING_MODE,				\
 			(.poll_interval =							\
 				K_MSEC(CONFIG_MCTP_I3C_CONTROLLER_POLL_INTERVAL_MS)), ())	\
 	};
 
-#endif /* ZEPHYR_MCTP_I3C_CONTROLLER_H_ */
+#endif /* ZEPHYR_INCLUDE_PMCI_MCTP_MCTP_I3C_CONTROLLER_H_ */

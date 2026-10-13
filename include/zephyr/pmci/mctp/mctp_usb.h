@@ -6,8 +6,14 @@
  *
  */
 
-#ifndef ZEPHYR_MCTP_USB_H_
-#define ZEPHYR_MCTP_USB_H_
+/**
+ * @file
+ * @brief MCTP bus binding over the Zephyr USB device stack.
+ * @ingroup mctp
+ */
+
+#ifndef ZEPHYR_INCLUDE_PMCI_MCTP_MCTP_USB_H_
+#define ZEPHYR_INCLUDE_PMCI_MCTP_MCTP_USB_H_
 
 #include <zephyr/sys/iterable_sections.h>
 #include <libmctp.h>
@@ -99,4 +105,4 @@ int mctp_usb_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt);
 		.mctp_binding = &_name,								\
 	};
 
-#endif /* ZEPHYR_MCTP_USB_H_ */
+#endif /* ZEPHYR_INCLUDE_PMCI_MCTP_MCTP_USB_H_ */
