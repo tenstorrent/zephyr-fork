@@ -773,11 +773,12 @@ static inline void cdns_i3c_interrupts_clear(const struct cdns_i3c_config *confi
 static void cdns_i3c_write_tx_fifo(const struct cdns_i3c_config *config, const void *buf,
 				   uint32_t len)
 {
-	const uint32_t *ptr = buf;
+	const uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
-		val = *ptr++;
+		val = UNALIGNED_GET((const uint32_t *)ptr);
+		ptr += 4;
 		sys_write32(val, config->base + TX_FIFO);
 	}
 
@@ -792,11 +793,12 @@ static void cdns_i3c_write_tx_fifo(const struct cdns_i3c_config *config, const v
 static void cdns_i3c_write_ddr_tx_fifo(const struct cdns_i3c_config *config, const void *buf,
 				       uint32_t len)
 {
-	const uint32_t *ptr = buf;
+	const uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
-		val = *ptr++;
+		val = UNALIGNED_GET((const uint32_t *)ptr);
+		ptr += 4;
 		sys_write32(val, config->base + SLV_DDR_TX_FIFO);
 	}
 
@@ -813,11 +815,12 @@ static void cdns_i3c_write_ddr_tx_fifo(const struct cdns_i3c_config *config, con
 static void cdns_i3c_write_ibi_fifo(const struct cdns_i3c_config *config, const void *buf,
 				    uint32_t len)
 {
-	const uint32_t *ptr = buf;
+	const uint8_t *ptr = buf;
 	uint32_t remain, val;
 
 	for (remain = len; remain >= 4; remain -= 4) {
-		val = *ptr++;
+		val = UNALIGNED_GET((const uint32_t *)ptr);
+		ptr += 4;
 		sys_write32(val, config->base + IBI_DATA_FIFO);
 	}
 
@@ -3551,7 +3554,6 @@ static int cdns_i3c_target_tx_write(const struct device *dev, uint8_t *buf, uint
 	const struct cdns_i3c_config *config = dev->config;
 	struct cdns_i3c_data *data = dev->data;
 	struct i3c_config_controller *ctrl_config = &data->common.ctrl_config;
-	const uint32_t *buf_32 = (uint32_t *)buf;
 	uint32_t i = 0;
 	uint32_t val = 0;
 	uint16_t remain = len;
@@ -3593,13 +3595,14 @@ static int cdns_i3c_target_tx_write(const struct device *dev, uint8_t *buf, uint
 			if (REV_ID_REV(data->hw_cfg.rev_id) >= REV_ID_VERSION(1, 7)) {
 				remain = len - i;
 				if (remain >= 4) {
-					val = *buf_32++;
+					val = UNALIGNED_GET((const uint32_t *)&buf[i]);
+					i += sizeof(uint32_t);
 				} else if (remain > 0) {
 					val = 0;
-					memcpy(&val, buf_32, remain);
+					memcpy(&val, &buf[i], remain);
+					i += remain;
 				}
 				sys_write32(val, config->base + TX_FIFO);
-				i += 4;
 			} else {
 				sys_write32((uint32_t)buf[i], config->base + TX_FIFO);
 				i++;
