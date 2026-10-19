@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+description: Winbond W25Q51RW SPI NOR flash
+
+compatible: "winbond,w25q51rw"
+
+include: jedec,mspi-nor.yaml
+
+properties:
+  winbond,output-driver-ohms:
+    type: int
+    enum:
+      - 25
+      - 33
+      - 50
+      - 100
+    description: |
+      Output driver impedance, in ohms, set through the DRV1:DRV0 bits of
+      Status Register-3 with a volatile write at initialization. When
+      omitted, the chip keeps its non-volatile setting, which by default
+      is 50 ohms for -Q/-M/-V parts and 33 ohms for -N parts.

@@ -1576,6 +1576,9 @@ BUILD_ASSERT((FLASH_SIZE_INST(inst) % CONFIG_FLASH_MSPI_NOR_LAYOUT_PAGE_SIZE) ==
 		FLASH_PAGE_LAYOUT_DEFINE(inst)					\
 		.jedec_id = DT_INST_PROP_OR(inst, jedec_id, {0}),		\
 		.quirks = FLASH_QUIRKS(inst),					\
+		IF_ENABLED(DT_HAS_COMPAT_STATUS_OKAY(winbond_w25q51rw),		\
+			(.winbond_drv = DT_INST_ENUM_IDX_OR(inst,		\
+				winbond_output_driver_ohms, -1),))		\
 		.default_erase_types = DEFAULT_ERASE_TYPES(inst),		\
 		.default_cmd_info = DEFAULT_CMD_INFO(inst),			\
 		.default_switch_info = DEFAULT_SWITCH_INFO(inst),		\
