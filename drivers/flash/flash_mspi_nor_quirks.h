@@ -26,7 +26,9 @@ struct flash_mspi_nor_quirks {
 		    (&flash_quirks_mxicy_mx25r),				\
 	(COND_CODE_1(DT_NODE_HAS_COMPAT_STATUS(node, mxicy_mx25u, okay),	\
 		    (&flash_quirks_mxicy_mx25u),				\
-		    (NULL))))
+	(COND_CODE_1(DT_NODE_HAS_COMPAT_STATUS(node, winbond_w25q51rw, okay),	\
+		    (&flash_quirks_winbond_w25q51rw),				\
+		    (NULL))))))
 
 #if DT_HAS_COMPAT_STATUS_OKAY(mxicy_mx25r)
 
@@ -210,5 +212,71 @@ struct flash_mspi_nor_quirks flash_quirks_mxicy_mx25u = {
 };
 
 #endif /* DT_HAS_COMPAT_STATUS_OKAY(mxicy_mx25u) */
+
+#if DT_HAS_COMPAT_STATUS_OKAY(winbond_w25q51rw)
+
+#define WINBOND_CMD_WREN_VSR 0x50 /* Write enable for volatile status register */
+#define WINBOND_SR3_DRV_MASK GENMASK(6, 5)
+
+/* Apply the output driver strength with a volatile write to SR3. */
+static inline int winbond_w25q51rw_post_switch_mode(const struct device *dev)
+{
+	const struct flash_mspi_nor_config *dev_config = dev->config;
+	struct flash_mspi_nor_data *dev_data = dev->data;
+	uint8_t drv;
+	uint8_t sr3;
+	int rc;
+
+	if (dev_config->winbond_drv < 0) {
+		return 0;
+	}
+
+	drv = dev_config->winbond_drv;
+
+	rc = cmd_rdsr(dev, SPI_NOR_CMD_RDSR3, &sr3);
+	if (rc < 0) {
+		return rc;
+	}
+
+	if (FIELD_GET(WINBOND_SR3_DRV_MASK, sr3) == drv) {
+		return 0;
+	}
+
+	set_up_xfer(dev, MSPI_TX, dev_config->control_xfer_mode);
+	rc = perform_xfer(dev, WINBOND_CMD_WREN_VSR);
+	if (rc < 0) {
+		return rc;
+	}
+
+	sr3 &= ~WINBOND_SR3_DRV_MASK;
+	sr3 |= FIELD_PREP(WINBOND_SR3_DRV_MASK, drv);
+
+	set_up_xfer(dev, MSPI_TX, dev_config->control_xfer_mode);
+	dev_data->packet.data_buf  = &sr3;
+	dev_data->packet.num_bytes = sizeof(sr3);
+	rc = perform_xfer(dev, SPI_NOR_CMD_WRSR3);
+	if (rc < 0) {
+		return rc;
+	}
+
+	/* Volatile writes complete within tSHSL2, without BUSY */
+	rc = cmd_rdsr(dev, SPI_NOR_CMD_RDSR3, &sr3);
+	if (rc < 0) {
+		return rc;
+	}
+
+	if (FIELD_GET(WINBOND_SR3_DRV_MASK, sr3) != drv) {
+		LOG_ERR("SR3 output driver strength not applied: 0x%02x", sr3);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+struct flash_mspi_nor_quirks flash_quirks_winbond_w25q51rw = {
+	.post_switch_mode = winbond_w25q51rw_post_switch_mode,
+};
+
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(winbond_w25q51rw) */
 
 #endif /*__FLASH_MSPI_NOR_QUIRKS_H__*/

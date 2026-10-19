@@ -110,6 +110,10 @@ struct flash_mspi_nor_config {
 #endif
 	uint8_t jedec_id[SPI_NOR_MAX_ID_LEN];
 	struct flash_mspi_nor_quirks *quirks;
+#if DT_HAS_COMPAT_STATUS_OKAY(winbond_w25q51rw)
+	/* SR3 DRV1:DRV0 value to apply, or -1 to keep the chip's setting */
+	int8_t winbond_drv;
+#endif
 	const struct jesd216_erase_type *default_erase_types;
 	struct flash_mspi_nor_cmd_info default_cmd_info;
 	struct flash_mspi_nor_switch_info default_switch_info;
