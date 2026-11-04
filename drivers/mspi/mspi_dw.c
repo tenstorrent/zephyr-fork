@@ -84,6 +84,13 @@ struct mspi_dw_data {
 	struct mspi_callback_context *cb_ctxs[MSPI_BUS_EVENT_MAX];
 #else
 	volatile bool finished;
+#endif
+	/* Set when the TX FIFO drained completely and the controller went idle
+	 * (ending the transfer and deasserting CE) before all data of a TX
+	 * packet was written to the FIFO, i.e. the transfer was truncated.
+	 */
+	bool tx_underrun;
+#if !defined(CONFIG_MULTITHREADING)
 	bool cfg_lock;
 #endif
 
@@ -264,7 +271,7 @@ static void async_packet_work_handler(struct k_work *work)
 }
 #endif /* defined(CONFIG_MULTITHREADING) */
 
-static void tx_data(const struct device *dev)
+static void tx_data(const struct device *dev, bool refill)
 {
 	struct mspi_dw_data *dev_data = dev->data;
 	const struct mspi_dw_config *dev_config = dev->config;
@@ -281,6 +288,7 @@ static void tx_data(const struct device *dev)
 	uint32_t room = 1;
 	uint8_t bytes_per_frame_exp = dev_data->bytes_per_frame_exp;
 	uint8_t tx_fifo_depth = dev_config->tx_fifo_depth_minus_1 + 1;
+	bool check_after = refill;
 	uint32_t data;
 
 	do {
@@ -295,6 +303,23 @@ static void tx_data(const struct device *dev)
 			buf_pos += 1;
 		}
 		write_dr(dev, data);
+
+		/* In PIO mode the TX FIFO must be refilled before it drains.
+		 * If servicing of the interrupt was delayed long enough for
+		 * the FIFO to become empty and the last frame to be shifted
+		 * out, the controller has already ended the transfer
+		 * (deasserted CE) and the item written above sits in the FIFO
+		 * alone. That item cannot start a new transaction on its own,
+		 * so the controller being idle at this point means that the
+		 * transfer was truncated.
+		 */
+		if (refill) {
+			refill = false;
+			if (!(read_sr(dev) & SR_BUSY_BIT)) {
+				dev_data->tx_underrun = true;
+				break;
+			}
+		}
 
 		if (buf_pos >= buf_end) {
 			/* Set the threshold to 0 to get the next interrupt
@@ -313,6 +338,18 @@ static void tx_data(const struct device *dev)
 			     - FIELD_GET(TXFLR_TXTFL_MASK, read_txflr(dev));
 		}
 	} while (room);
+
+	/* The controller may also have ended the transfer while the items
+	 * above were being written (after the check following the first
+	 * one). Items written after that point stay in the FIFO of the idle
+	 * controller (not enough of them to reach the start level), so they
+	 * would never be transmitted and no further interrupt would occur.
+	 */
+	if (check_after && !dev_data->tx_underrun &&
+	    !(read_sr(dev) & SR_BUSY_BIT) &&
+	    FIELD_GET(TXFLR_TXTFL_MASK, read_txflr(dev)) != 0) {
+		dev_data->tx_underrun = true;
+	}
 
 	dev_data->buf_pos = (uint8_t *)buf_pos;
 }
@@ -462,7 +499,10 @@ static void handle_fifos(const struct device *dev)
 
 	if (packet->dir == MSPI_TX) {
 		if (dev_data->buf_pos < dev_data->buf_end) {
-			tx_data(dev);
+			tx_data(dev, true);
+			if (dev_data->tx_underrun) {
+				finished = true;
+			}
 		} else {
 			/* It may happen that at this point the controller is
 			 * still shifting out the last frame (the last interrupt
@@ -1381,6 +1421,7 @@ static int start_next_packet(const struct device *dev)
 		/* PIO mode */
 		dev_data->buf_pos = packet->data_buf;
 		dev_data->buf_end = &packet->data_buf[packet->num_bytes];
+		dev_data->tx_underrun = false;
 		/* Set the TX FIFO threshold and its transmit start level. */
 		if (packet->num_bytes) {
 			/* If there is some data to send/receive, set the threshold to
@@ -1467,7 +1508,7 @@ static int start_next_packet(const struct device *dev)
 			imr = IMR_RXFIM_BIT;
 		} else if (packet->dir == MSPI_TX) {
 			if (data_frames) {
-				tx_data(dev);
+				tx_data(dev, false);
 			}
 		} else { /* packet->dir == MSPI_RX */
 			if (data_only_packet) {
@@ -1532,6 +1573,11 @@ static int finalize_packet(const struct device *dev, int rc)
 
 	if (read_risr(dev) & RISR_RXOIR_BIT) {
 		LOG_ERR("RX FIFO overflow occurred");
+		rc = -EIO;
+	} else if (dev_data->tx_underrun) {
+		LOG_ERR("TX FIFO underrun, transfer truncated with %u of %u bytes left",
+			(unsigned int)(dev_data->buf_end - dev_data->buf_pos),
+			dev_data->xfer.packets[dev_data->packets_done].num_bytes);
 		rc = -EIO;
 	} else if (rc == -ETIMEDOUT) {
 		LOG_ERR("Transfer timed out");
