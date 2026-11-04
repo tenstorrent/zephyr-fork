@@ -489,27 +489,49 @@ static int api_write(const struct device *dev, off_t addr, const void *src,
 		uint16_t page_left = page_size - page_offset;
 		uint16_t to_write = (uint16_t)MIN(size, page_left);
 
-		if (cmd_wren(dev) < 0) {
-			break;
+		/* A page program transfer can be cut short by the controller
+		 * (e.g. its TX FIFO ran dry), which it reports as -EIO.
+		 * Program the same page with the same data on failure.
+		 */
+		for (int attempt = 0;; attempt++) {
+			rc = cmd_wren(dev);
+			if (rc < 0) {
+				break;
+			}
+
+			set_up_xfer_with_addr(dev, MSPI_TX, addr,
+					      dev_config->data_xfer_mode);
+			dev_data->packet.data_buf  = (uint8_t *)src;
+			dev_data->packet.num_bytes = to_write;
+			rc = perform_xfer(dev, dev_data->cmd_info.pp_cmd);
+			if (rc == 0) {
+				rc = wait_until_ready(dev, K_MSEC(1));
+				if (rc < 0) {
+					break;
+				}
+			}
+
+			if (rc != -EIO || attempt >= CONFIG_FLASH_MSPI_NOR_PP_RETRIES) {
+				break;
+			}
+
+			LOG_WRN("Page program at 0x%lx incomplete, retrying (%d)",
+				(unsigned long)addr, attempt + 1);
+			/* The flash may still be busy with a truncated program. */
+			rc = wait_until_ready(dev, K_MSEC(1));
+			if (rc < 0) {
+				break;
+			}
 		}
 
-		set_up_xfer_with_addr(dev, MSPI_TX, addr, dev_config->data_xfer_mode);
-		dev_data->packet.data_buf  = (uint8_t *)src;
-		dev_data->packet.num_bytes = to_write;
-		rc = perform_xfer(dev, dev_data->cmd_info.pp_cmd);
 		if (rc < 0) {
-			LOG_ERR("Page program xfer failed: %d", rc);
+			LOG_ERR("Page program at 0x%lx failed: %d", (unsigned long)addr, rc);
 			break;
 		}
 
 		addr += to_write;
 		src   = (const uint8_t *)src + to_write;
 		size -= to_write;
-
-		rc = wait_until_ready(dev, K_MSEC(1));
-		if (rc < 0) {
-			break;
-		}
 	}
 
 	release(dev);

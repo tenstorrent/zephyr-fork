@@ -79,6 +79,15 @@ config FLASH_MSPI_NOR_LAYOUT_PAGE_SIZE
 	  Other options include the 32K-byte erase size (32768), the sector
 	  size (4096), or any non-zero multiple of the sector size.
 
+config FLASH_MSPI_NOR_PP_RETRIES
+	int "Number of times to retry an incomplete page program"
+	default 3
+	help
+	  If the MSPI controller reports that a page program transfer was
+	  truncated (-EIO), retry programming the same page with the same
+	  data up to this many times before giving up. Set to 0 to disable
+	  retries.
+
 config FLASH_MSPI_NOR_ACTIVE_DWELL_MS
 	int "Dwell period (ms) after last use to stay in active mode"
 	depends on PM_DEVICE_RUNTIME
