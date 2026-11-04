@@ -354,6 +354,21 @@ static void tx_data(const struct device *dev, bool refill)
 	dev_data->buf_pos = (uint8_t *)buf_pos;
 }
 
+#if CONFIG_MSPI_DW_PIO_TX_SPIN_MAX_US > 0
+/* Time, in microseconds, needed to shift out the data phase of a TX packet */
+static uint32_t tx_data_phase_time_us(const struct device *dev, uint32_t num_bytes)
+{
+	struct mspi_dw_data *dev_data = dev->data;
+	const struct mspi_dw_config *dev_config = dev->config;
+	/* SPI_FRF encodes the number of data lines as 0..3 -> 1, 2, 4, 8. */
+	uint32_t lines = 1 << FIELD_GET(CTRLR0_SPI_FRF_MASK, dev_data->ctrlr0);
+	uint32_t bits = num_bytes * 8;
+
+	return DIV_ROUND_UP((uint64_t)bits * dev_data->baudr * USEC_PER_SEC,
+			    (uint64_t)lines * dev_config->clock_frequency);
+}
+#endif
+
 static bool tx_dummy_bytes(const struct device *dev, bool *repeat)
 {
 	struct mspi_dw_data *dev_data = dev->data;
@@ -1219,6 +1234,7 @@ static int start_next_packet(const struct device *dev)
 	unsigned int key;
 	uint32_t data_frames;
 	uint32_t imr = 0;
+	bool __maybe_unused tx_spin = false;
 	int rc = 0;
 
 
@@ -1519,6 +1535,21 @@ static int start_next_packet(const struct device *dev)
 			}
 		}
 
+#if CONFIG_MSPI_DW_PIO_TX_SPIN_MAX_US > 0
+		/* In PIO mode the TX FIFO is refilled from the interrupt
+		 * handler and must be refilled before it drains.
+		 * If the calling thread blocks right after the transfer is
+		 * started, the resulting context switch can take longer
+		 * than that, so for short data phases the thread
+		 * busy-waits instead until all data is in the FIFO.
+		 */
+		tx_spin = (packet->dir == MSPI_TX && !dev_data->xfer.async &&
+			   dev_data->dummy_bytes == 0 &&
+			   dev_data->buf_pos < dev_data->buf_end &&
+			   tx_data_phase_time_us(dev, packet->num_bytes) <=
+			   CONFIG_MSPI_DW_PIO_TX_SPIN_MAX_US);
+#endif
+
 		/* Enable interrupts now and wait until the packet is done unless async. */
 		write_imr(dev, imr);
 #if defined(CONFIG_MSPI_DMA)
@@ -1539,6 +1570,26 @@ static int start_next_packet(const struct device *dev)
 
 	/* Write SER to start transfer */
 	write_ser(dev, BIT(dev_data->dev_id->dev_idx));
+
+#if CONFIG_MSPI_DW_PIO_TX_SPIN_MAX_US > 0
+	if (tx_spin) {
+		/* Interrupts stay enabled and the thread remains preemptible.
+		 * This only avoids the blocking context switch while the data
+		 * phase is in progress.
+		 */
+		uint32_t limit = k_us_to_cyc_ceil32(
+			2 * tx_data_phase_time_us(dev, packet->num_bytes) + 20);
+		uint32_t start = k_cycle_get_32();
+
+		while (k_cycle_get_32() - start < limit) {
+			compiler_barrier();
+			if (dev_data->buf_pos >= dev_data->buf_end ||
+			    dev_data->tx_underrun) {
+				break;
+			}
+		}
+	}
+#endif
 
 #if defined(CONFIG_MULTITHREADING)
 	/* For async transfer, exit after starting the timeout timer. */

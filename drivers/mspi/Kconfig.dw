@@ -28,6 +28,18 @@ config MSPI_DW_HANDLE_FIFOS_IN_SYSTEM_WORKQUEUE
 	  in the interrupt context. This option allows offloading the job to
 	  the system workqueue.
 
+config MSPI_DW_PIO_TX_SPIN_MAX_US
+	int "Busy-wait during TX data phases up to this long (us)"
+	default 0
+	help
+	  When this option is set to a non-zero value, for synchronous TX
+	  packets whose data phase (computed from the packet size, number of
+	  data lines and clock frequency) takes at most this many
+	  microseconds, the calling thread busy-waits, with interrupts
+	  enabled and preemptible, until all data has been written to the
+	  FIFO by the interrupt handler, and only then blocks waiting for the
+	  end of the packet.
+
 config MSPI_DW_TXD_DIV
 	int "Designware SSI TX Drive edge divisor"
 	depends on MSPI_DW_DDR
