@@ -533,7 +533,7 @@ static int api_write(const struct device *dev, off_t addr, const void *src,
 		src   = (const uint8_t *)src + to_write;
 		size -= to_write;
 
-		rc = wait_until_ready(dev, K_MSEC(1));
+		rc = wait_until_ready(dev, K_USEC(CONFIG_FLASH_MSPI_NOR_PP_POLL_US));
 		if (rc < 0) {
 			break;
 		}
