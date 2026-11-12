@@ -59,8 +59,6 @@ struct mspi_dw_data {
 	enum mspi_cpp_mode xip_cpp;
 #endif
 
-	uint32_t dummy_bytes;
-	uint8_t bytes_to_discard;
 	uint8_t bytes_per_frame_exp;
 	/* Number of lines the address phase is transferred on. */
 	uint8_t addr_lines;
@@ -106,13 +104,6 @@ struct mspi_dw_config {
 	const struct gpio_dt_spec *ce_gpios;
 	uint8_t ce_gpios_len;
 	uint8_t tx_fifo_depth_minus_1;
-	/* Maximum number of items allowed in the TX FIFO when transmitting
-	 * dummy bytes; it must be at least one less than the RX FIFO depth
-	 * to account for a byte that can be partially received (i.e. in
-	 * the shifting register) when tx_dummy_bytes() calculates how many
-	 * bytes can be written to the TX FIFO to not overflow the RX FIFO.
-	 */
-	uint8_t max_queued_dummy_bytes;
 	uint8_t tx_fifo_threshold;
 	uint8_t rx_fifo_threshold;
 #ifdef CONFIG_MSPI_DMA
@@ -317,66 +308,10 @@ static void tx_data(const struct device *dev)
 	dev_data->buf_pos = (uint8_t *)buf_pos;
 }
 
-static bool tx_dummy_bytes(const struct device *dev, bool *repeat)
-{
-	struct mspi_dw_data *dev_data = dev->data;
-	const struct mspi_dw_config *dev_config = dev->config;
-	uint8_t fifo_room = dev_config->max_queued_dummy_bytes
-			  - FIELD_GET(TXFLR_TXTFL_MASK, read_txflr(dev));
-	uint16_t rx_fifo_items = FIELD_GET(RXFLR_RXTFL_MASK, read_rxflr(dev));
-	uint32_t dummy_bytes = dev_data->dummy_bytes;
-	const uint8_t dummy_val = 0;
-
-	/* Subtract the number of items that are already stored in the RX
-	 * FIFO to avoid overflowing it; `max_queued_dummy_bytes` accounts
-	 * that one byte that can be partially received, thus not included
-	 * in the value from the RXFLR register.
-	 * This check also handles the case when the function is called but
-	 * the TX FIFO is already filled up (fifo_room == 0).
-	 */
-	if (fifo_room <= rx_fifo_items) {
-		if (repeat) {
-			/* If no dummy bytes can be sent now, there is no point
-			 * in repeating the loop that reads the RX FIFO.
-			 */
-			*repeat = false;
-		}
-
-		return false;
-	}
-	fifo_room -= rx_fifo_items;
-
-	if (dummy_bytes > fifo_room) {
-		dev_data->dummy_bytes = dummy_bytes - fifo_room;
-
-		do {
-			write_dr(dev, dummy_val);
-		} while (--fifo_room);
-
-		return false;
-	}
-
-	do {
-		write_dr(dev, dummy_val);
-	} while (--dummy_bytes);
-
-	dev_data->dummy_bytes = 0;
-
-	/* Set the TX start level to 0, so that the transmission will be
-	 * started now if it hasn't been yet. The threshold value is also
-	 * set to 0 here, but it doesn't really matter, as the interrupt
-	 * will be anyway disabled.
-	 */
-	write_txftlr(dev, 0);
-
-	return true;
-}
-
 static bool read_rx_fifo(const struct device *dev)
 {
 	struct mspi_dw_data *dev_data = dev->data;
 	const struct mspi_dw_config *dev_config = dev->config;
-	uint8_t bytes_to_discard = dev_data->bytes_to_discard;
 	uint8_t *buf_pos = dev_data->buf_pos;
 	const uint8_t *buf_end = dev_data->buf_end;
 	uint8_t bytes_per_frame_exp = dev_data->bytes_per_frame_exp;
@@ -390,24 +325,20 @@ static bool read_rx_fifo(const struct device *dev)
 	do {
 		uint32_t data = read_dr(dev);
 
-		if (bytes_to_discard) {
-			--bytes_to_discard;
+		if (bytes_per_frame_exp == 2) {
+			sys_put_be32(data, buf_pos);
+			buf_pos += 4;
+		} else if (bytes_per_frame_exp == 1) {
+			sys_put_be16(data, buf_pos);
+			buf_pos += 2;
 		} else {
-			if (bytes_per_frame_exp == 2) {
-				sys_put_be32(data, buf_pos);
-				buf_pos += 4;
-			} else if (bytes_per_frame_exp == 1) {
-				sys_put_be16(data, buf_pos);
-				buf_pos += 2;
-			} else {
-				*buf_pos = (uint8_t)data;
-				buf_pos += 1;
-			}
+			*buf_pos = (uint8_t)data;
+			buf_pos += 1;
+		}
 
-			if (buf_pos >= buf_end) {
-				dev_data->buf_pos = buf_pos;
-				return true;
-			}
+		if (buf_pos >= buf_end) {
+			dev_data->buf_pos = buf_pos;
+			return true;
 		}
 
 		if (--in_fifo == 0) {
@@ -415,13 +346,11 @@ static bool read_rx_fifo(const struct device *dev)
 		}
 	} while (in_fifo);
 
-	remaining_frames = (bytes_to_discard + buf_end - buf_pos)
-			   >> bytes_per_frame_exp;
+	remaining_frames = (buf_end - buf_pos) >> bytes_per_frame_exp;
 	if (remaining_frames - 1 < dev_config->rx_fifo_threshold) {
 		write_rxftlr(dev, remaining_frames - 1);
 	}
 
-	dev_data->bytes_to_discard = bytes_to_discard;
 	dev_data->buf_pos = buf_pos;
 	return false;
 }
@@ -474,65 +403,14 @@ static void handle_fifos(const struct device *dev)
 
 			finished = true;
 		}
-	} else {
-		bool repeat = true;
-
-		do {
-			/* Always read everything from the RX FIFO, regardless
-			 * of the interrupt status.
-			 * tx_dummy_bytes() subtracts the number of items that
-			 * are present in the RX FIFO from the number of dummy
-			 * bytes it is allowed to send, so it can potentially
-			 * not fill the TX FIFO above its transfer start level
-			 * in some iteration of this loop. If in such case the
-			 * interrupt handler exited without emptying the RX FIFO
-			 * (seeing the RXFIS flag not set due to not enough
-			 * items in the RX FIFO), this could lead to a situation
-			 * in which a transfer stopped temporarily (after the TX
-			 * FIFO got empty) is not resumed (since the TX FIFO is
-			 * not filled above its transfer start level), so no
-			 * further dummy bytes are transmitted and the RX FIFO
-			 * has no chance to get new entries, hence no further
-			 * interrupts are generated and the transfer gets stuck.
-			 */
-			if (read_rx_fifo(dev)) {
-				finished = true;
-				break;
-			}
-
-			/* Use RISR, not ISR, because when this function is
-			 * executed through the system workqueue, all interrupts
-			 * are masked (IMR is 0).
-			 */
-			uint32_t int_status = read_risr(dev);
-
-			if (int_status & RISR_RXOIR_BIT) {
-				finished = true;
-				break;
-			}
-
-			/* If there are still some dummy bytes to transmit,
-			 * always try to put some into the TX FIFO, no matter
-			 * what's the TXE interrupt status - the TX FIFO may be
-			 * filled above its threshold level (then its interrupt
-			 * flag is not set), but below its transfer start level,
-			 * so the controller may be waiting for more items to
-			 * appear there.
-			 */
-			if (dev_data->dummy_bytes == 0) {
-				break;
-			}
-
-			if (tx_dummy_bytes(dev, &repeat)) {
-				/* All the required dummy bytes were written
-				 * to the FIFO; disable the TXE interrupt,
-				 * as it's no longer needed.
-				 */
-				set_imr(dev, IMR_RXFIM_BIT);
-			}
-
-			/* Repeat the loop only if any dummy bytes were sent. */
-		} while (repeat);
+	} else if (read_rx_fifo(dev)) {
+		finished = true;
+	} else if (read_risr(dev) & RISR_RXOIR_BIT) {
+		/* Use RISR, not ISR, because when this function is
+		 * executed through the system workqueue, all interrupts
+		 * are masked (IMR is 0).
+		 */
+		finished = true;
 	}
 
 	if (finished) {
@@ -1188,9 +1066,6 @@ static int start_next_packet(const struct device *dev)
 		return 0;
 	}
 
-	dev_data->dummy_bytes = 0;
-	dev_data->bytes_to_discard = 0;
-
 	dev_data->ctrlr0 &= ~CTRLR0_TMOD_MASK
 			 &  ~CTRLR0_DFS_MASK
 			 &  ~CTRLR0_DFS32_MASK;
@@ -1386,7 +1261,7 @@ static int start_next_packet(const struct device *dev)
 			/* If there is some data to send/receive, set the threshold to
 			 * the value configured for the driver instance and the start
 			 * level to the maximum possible value (it will be updated later
-			 * in tx_fifo() or tx_dummy_bytes() when TX is to be finished).
+			 * in tx_data() when TX is to be finished).
 			 * This helps avoid a situation when the TX FIFO becomes empty
 			 * before the transfer is complete and the SSI core finishes the
 			 * transaction and deactivates the CE line. This could occur
@@ -1394,11 +1269,8 @@ static int start_next_packet(const struct device *dev)
 			 * clock stretching feature does not work yet, or in Standard
 			 * SPI mode, where the clock stretching is not available at all.
 			 */
-			uint8_t start_level = dev_data->dummy_bytes != 0
-					? dev_config->max_queued_dummy_bytes - 1
-					: dev_config->tx_fifo_depth_minus_1;
-
-			write_txftlr(dev, FIELD_PREP(TXFTLR_TXFTHR_MASK, start_level) |
+			write_txftlr(dev, FIELD_PREP(TXFTLR_TXFTHR_MASK,
+						     dev_config->tx_fifo_depth_minus_1) |
 				     FIELD_PREP(TXFTLR_TFT_MASK,
 						dev_config->tx_fifo_threshold));
 
@@ -1474,9 +1346,7 @@ static int start_next_packet(const struct device *dev)
 		}
 
 		/* Prefill TX FIFO with any data we can */
-		if (dev_data->dummy_bytes && tx_dummy_bytes(dev, NULL)) {
-			imr = IMR_RXFIM_BIT;
-		} else if (packet->dir == MSPI_TX) {
+		if (packet->dir == MSPI_TX) {
 			if (data_frames) {
 				tx_data(dev);
 			}
@@ -2130,8 +2000,6 @@ static DEVICE_API(mspi, drv_api) = {
 			1 * RX_FIFO_DEPTH(inst) / 8 - 1)
 #define MSPI_DW_FIFO_PROPS(inst)					\
 	.tx_fifo_depth_minus_1 = TX_FIFO_DEPTH(inst) - 1,		\
-	.max_queued_dummy_bytes = MIN(RX_FIFO_DEPTH(inst) - 1,		\
-				      TX_FIFO_DEPTH(inst)),		\
 	.tx_fifo_threshold = TX_FIFO_THRESHOLD(inst),			\
 	.rx_fifo_threshold = RX_FIFO_THRESHOLD(inst)
 
