@@ -1101,6 +1101,35 @@ static bool packet_fits_fifos(const struct device *dev,
 	return true;
 }
 
+/* Complete a packet that fits in the FIFOs, without interrupts. All of its TX
+ * entries were written before the transfer was started, so it cannot be cut
+ * short, and the calling thread may be preempted at any point.
+ */
+static int poll_packet(const struct device *dev,
+		       const struct mspi_xfer_packet *packet)
+{
+	struct mspi_dw_data *dev_data = dev->data;
+	uint32_t timeout_us = dev_data->xfer.timeout * USEC_PER_MSEC;
+
+	if (packet->dir == MSPI_RX && packet->num_bytes) {
+		if (!WAIT_FOR(read_rx_fifo(dev), timeout_us, NULL)) {
+			return -ETIMEDOUT;
+		}
+	} else if (!WAIT_FOR(FIELD_GET(TXFLR_TXTFL_MASK, read_txflr(dev)) == 0,
+			     timeout_us, NULL)) {
+		return -ETIMEDOUT;
+	}
+
+	/* The last frame may still be shifting out. BUSY is only meaningful
+	 * once the transfer has started, which is ensured above.
+	 */
+	if (!WAIT_FOR(!(read_sr(dev) & SR_BUSY_BIT), timeout_us, NULL)) {
+		return -ETIMEDOUT;
+	}
+
+	return 0;
+}
+
 static int start_next_packet(const struct device *dev)
 {
 	const struct mspi_dw_config *dev_config = dev->config;
@@ -1320,7 +1349,12 @@ static int start_next_packet(const struct device *dev)
 		dev_data->buf_pos = packet->data_buf;
 		dev_data->buf_end = &packet->data_buf[packet->num_bytes];
 		/* Set the TX FIFO threshold and its transmit start level. */
-		if (packet->num_bytes && !eeprom_read) {
+		if (dev_config->fifo_bound) {
+			/* No start level is needed, the whole packet is in
+			 * the FIFO before SER starts the transfer.
+			 */
+			write_txftlr(dev, 0);
+		} else if (packet->num_bytes && !eeprom_read) {
 			/* If there is some data to send/receive, set the threshold to
 			 * the value configured for the driver instance and the start
 			 * level to the maximum possible value (it will be updated later
@@ -1423,7 +1457,9 @@ static int start_next_packet(const struct device *dev)
 		}
 
 		/* Enable interrupts now and wait until the packet is done unless async. */
-		write_imr(dev, imr);
+		if (!dev_config->fifo_bound) {
+			write_imr(dev, imr);
+		}
 #if defined(CONFIG_MSPI_DMA)
 	}
 #endif
@@ -1442,6 +1478,10 @@ static int start_next_packet(const struct device *dev)
 
 	/* Write SER to start transfer */
 	write_ser(dev, BIT(dev_data->dev_id->dev_idx));
+
+	if (dev_config->fifo_bound) {
+		return finalize_packet(dev, poll_packet(dev, packet));
+	}
 
 #if defined(CONFIG_MULTITHREADING)
 	/* For async transfer, exit after starting the timeout timer. */
