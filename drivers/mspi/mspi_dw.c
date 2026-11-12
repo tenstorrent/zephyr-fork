@@ -323,7 +323,7 @@ static bool tx_dummy_bytes(const struct device *dev, bool *repeat)
 	const struct mspi_dw_config *dev_config = dev->config;
 	uint8_t fifo_room = dev_config->max_queued_dummy_bytes
 			  - FIELD_GET(TXFLR_TXTFL_MASK, read_txflr(dev));
-	uint8_t rx_fifo_items = FIELD_GET(RXFLR_RXTFL_MASK, read_rxflr(dev));
+	uint16_t rx_fifo_items = FIELD_GET(RXFLR_RXTFL_MASK, read_rxflr(dev));
 	uint32_t dummy_bytes = dev_data->dummy_bytes;
 	const uint8_t dummy_val = 0;
 
