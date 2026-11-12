@@ -104,6 +104,7 @@ struct mspi_dw_config {
 	const struct gpio_dt_spec *ce_gpios;
 	uint8_t ce_gpios_len;
 	uint8_t tx_fifo_depth_minus_1;
+	uint16_t rx_fifo_depth;
 	uint8_t tx_fifo_threshold;
 	uint8_t rx_fifo_threshold;
 #ifdef CONFIG_MSPI_DMA
@@ -113,6 +114,8 @@ struct mspi_dw_config {
 	void *vendor_specific_data;
 	DECLARE_REG_ACCESS();
 	bool sw_multi_periph;
+	/* Every packet must fit in the FIFOs (fifo-bound-transfers). */
+	bool fifo_bound;
 	enum mspi_op_mode op_mode;
 };
 
@@ -1043,6 +1046,61 @@ static void tx_addr_phase(const struct device *dev, uint32_t address)
 	}
 }
 
+/* Check that a packet fits in the FIFOs, as required by fifo-bound-transfers.
+ * Must be called once the frame size is set up for the packet.
+ */
+static bool packet_fits_fifos(const struct device *dev,
+			      const struct mspi_xfer_packet *packet,
+			      uint32_t data_frames)
+{
+	const struct mspi_dw_config *dev_config = dev->config;
+	const struct mspi_dw_data *dev_data = dev->data;
+	uint32_t tx_entries = 0;
+	uint32_t rx_frames = 0;
+
+	/* Command and address entries, as written by start_next_packet(). */
+	if (dev_data->standard_spi) {
+		tx_entries += dev_data->xfer.cmd_length + dev_data->xfer.addr_length;
+	} else {
+		if (dev_data->xfer.cmd_length) {
+			tx_entries += 1;
+		}
+
+		if (dev_data->xfer.addr_length) {
+			tx_entries += addr_phase_bits(dev_data, dev_data->xfer.addr_length,
+						      dev_data->xfer.mode_bit_cycles) > 32
+					      ? 2 : 1;
+		}
+	}
+
+	if (packet->dir == MSPI_TX) {
+		/* All data frames, including one sent as the address of a
+		 * data-only packet.
+		 */
+		tx_entries += packet->num_bytes >> dev_data->bytes_per_frame_exp;
+	} else if (packet->num_bytes) {
+		if (dev_data->xfer.cmd_length == 0 && dev_data->xfer.addr_length == 0) {
+			/* Dummy entry that starts a data-only RX packet. */
+			tx_entries += 1;
+		} else if (dev_data->standard_spi) {
+			/* Dummy bytes of an EEPROM read. */
+			tx_entries += dev_data->xfer.rx_dummy / 8;
+		}
+
+		rx_frames = data_frames;
+	}
+
+	if (tx_entries > dev_config->tx_fifo_depth_minus_1 + 1U ||
+	    rx_frames > dev_config->rx_fifo_depth) {
+		LOG_ERR("Packet of %u bytes needs %u TX and %u RX FIFO entries, "
+			"more than the FIFOs hold",
+			packet->num_bytes, tx_entries, rx_frames);
+		return false;
+	}
+
+	return true;
+}
+
 static int start_next_packet(const struct device *dev)
 {
 	const struct mspi_dw_config *dev_config = dev->config;
@@ -1186,6 +1244,11 @@ static int start_next_packet(const struct device *dev)
 
 		write_rxftlr(dev, FIELD_PREP(RXFTLR_RFT_MASK,
 					     rx_fifo_threshold));
+	}
+
+	if (dev_config->fifo_bound &&
+	    !packet_fits_fifos(dev, packet, data_frames)) {
+		return -EINVAL;
 	}
 
 	if (dev_data->dev_id->ce.port) {
@@ -1458,8 +1521,15 @@ static int finalize_packet(const struct device *dev, int rc)
 static int _api_transceive(const struct device *dev,
 			   const struct mspi_xfer *req)
 {
+	const struct mspi_dw_config *dev_config = dev->config;
 	struct mspi_dw_data *dev_data = dev->data;
 	int rc;
+
+	if (dev_config->fifo_bound &&
+	    (req->async || req->xfer_mode != MSPI_PIO)) {
+		LOG_ERR("Only synchronous PIO transfers are supported");
+		return -ENOTSUP;
+	}
 
 	if (dev_data->standard_spi) {
 		if (req->tx_dummy) {
@@ -2000,6 +2070,7 @@ static DEVICE_API(mspi, drv_api) = {
 			1 * RX_FIFO_DEPTH(inst) / 8 - 1)
 #define MSPI_DW_FIFO_PROPS(inst)					\
 	.tx_fifo_depth_minus_1 = TX_FIFO_DEPTH(inst) - 1,		\
+	.rx_fifo_depth = RX_FIFO_DEPTH(inst),				\
 	.tx_fifo_threshold = TX_FIFO_THRESHOLD(inst),			\
 	.rx_fifo_threshold = RX_FIFO_THRESHOLD(inst)
 
@@ -2050,6 +2121,7 @@ static DEVICE_API(mspi, drv_api) = {
 		DEFINE_REG_ACCESS(inst)					\
 		.sw_multi_periph =					\
 			DT_INST_PROP(inst, software_multiperipheral),	\
+		.fifo_bound = DT_INST_PROP(inst, fifo_bound_transfers),	\
 		.op_mode = DT_INST_STRING_TOKEN(inst, op_mode),		\
 	};								\
 	DEVICE_DT_INST_DEFINE(inst,					\
