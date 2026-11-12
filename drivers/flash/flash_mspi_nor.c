@@ -445,6 +445,9 @@ static int api_read(const struct device *dev, off_t addr, void *dest,
 		dev_data->packet.data_buf  = dest;
 		dev_data->packet.num_bytes = to_read;
 		rc = perform_xfer(dev, dev_data->cmd_info.read_cmd);
+		if (rc < 0) {
+			break;
+		}
 
 		addr += to_read;
 		dest  = (uint8_t *)dest + to_read;
@@ -489,7 +492,8 @@ static int api_write(const struct device *dev, off_t addr, const void *src,
 		uint16_t page_left = page_size - page_offset;
 		uint16_t to_write = (uint16_t)MIN(size, page_left);
 
-		if (cmd_wren(dev) < 0) {
+		rc = cmd_wren(dev);
+		if (rc < 0) {
 			break;
 		}
 
@@ -562,7 +566,8 @@ static int api_erase(const struct device *dev, off_t addr, size_t size)
 	}
 
 	while (size > 0) {
-		if (cmd_wren(dev) < 0) {
+		rc = cmd_wren(dev);
+		if (rc < 0) {
 			break;
 		}
 
