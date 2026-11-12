@@ -2111,24 +2111,42 @@ static DEVICE_API(mspi, drv_api) = {
 #define TX_FIFO_DEPTH(inst) DT_INST_PROP(inst, fifo_depth)
 #define RX_FIFO_DEPTH(inst) DT_INST_PROP_OR(inst, rx_fifo_depth,	\
 					    TX_FIFO_DEPTH(inst))
+#define TX_FIFO_THRESHOLD(inst)					\
+	DT_INST_PROP_OR(inst, tx_fifo_threshold,			\
+			7 * TX_FIFO_DEPTH(inst) / 8 - 1)
+#define RX_FIFO_THRESHOLD(inst)					\
+	DT_INST_PROP_OR(inst, rx_fifo_threshold,			\
+			1 * RX_FIFO_DEPTH(inst) / 8 - 1)
 #define MSPI_DW_FIFO_PROPS(inst)					\
 	.tx_fifo_depth_minus_1 = TX_FIFO_DEPTH(inst) - 1,		\
 	.max_queued_dummy_bytes = MIN(RX_FIFO_DEPTH(inst) - 1,		\
 				      TX_FIFO_DEPTH(inst)),		\
-	.tx_fifo_threshold =						\
-		DT_INST_PROP_OR(inst, tx_fifo_threshold,		\
-				7 * TX_FIFO_DEPTH(inst) / 8 - 1),	\
-	.rx_fifo_threshold =						\
-		DT_INST_PROP_OR(inst, rx_fifo_threshold,		\
-				1 * RX_FIFO_DEPTH(inst) / 8 - 1)
+	.tx_fifo_threshold = TX_FIFO_THRESHOLD(inst),			\
+	.rx_fifo_threshold = RX_FIFO_THRESHOLD(inst)
 
+#define DMA_TX_DATA_LEVEL(inst) \
+	DT_INST_PROP_OR(inst, dma_transmit_data_level, 0)
+#define DMA_RX_DATA_LEVEL(inst) \
+	DT_INST_PROP_OR(inst, dma_receive_data_level, 0)
 #define MSPI_DW_DMA_DATA_LEVELS(inst)					\
-	.dma_tx_data_level =						\
-		DT_INST_PROP_OR(inst, dma_transmit_data_level, 0),	\
-	.dma_rx_data_level =						\
-		DT_INST_PROP_OR(inst, dma_receive_data_level, 0)
+	.dma_tx_data_level = DMA_TX_DATA_LEVEL(inst),			\
+	.dma_rx_data_level = DMA_RX_DATA_LEVEL(inst)
+
+/* The core ignores a threshold or data level that is not below the FIFO
+ * depth. The binding bounds each property, but not relative to the other.
+ */
+#define MSPI_DW_FIFO_ASSERTS(inst)					\
+	BUILD_ASSERT(TX_FIFO_THRESHOLD(inst) < TX_FIFO_DEPTH(inst),	\
+		     "tx-fifo-threshold must be below fifo-depth");	\
+	BUILD_ASSERT(RX_FIFO_THRESHOLD(inst) < RX_FIFO_DEPTH(inst),	\
+		     "rx-fifo-threshold must be below rx-fifo-depth");	\
+	BUILD_ASSERT(DMA_TX_DATA_LEVEL(inst) < TX_FIFO_DEPTH(inst),	\
+		     "dma-transmit-data-level must be below fifo-depth"); \
+	BUILD_ASSERT(DMA_RX_DATA_LEVEL(inst) < RX_FIFO_DEPTH(inst),	\
+		     "dma-receive-data-level must be below rx-fifo-depth")
 
 #define MSPI_DW_INST(inst)						\
+	MSPI_DW_FIFO_ASSERTS(inst);					\
 	PM_DEVICE_DT_INST_DEFINE(inst, dev_pm_action_cb);		\
 	IF_ENABLED(CONFIG_PINCTRL, (PINCTRL_DT_INST_DEFINE(inst);))	\
 	VENDOR_SPECIFIC_DATA_DEFINE(inst);				\
