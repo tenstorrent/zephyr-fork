@@ -404,6 +404,25 @@ static uint8_t get_rx_dummy(const struct device *dev)
 }
 #endif
 
+/* Length of the next part of a transfer of `len` bytes, limited to `max`
+ * bytes if `max` is not 0. With a limit, parts longer than 4 bytes are kept
+ * to a multiple of 4 bytes, so that the controller can use 32-bit frames for
+ * them; the limit is given for that frame size.
+ */
+static uint32_t limit_xfer_len(uint32_t len, uint32_t max)
+{
+	if (max == 0) {
+		return len;
+	}
+
+	len = MIN(len, max);
+	if (len > 4) {
+		len = ROUND_DOWN(len, 4);
+	}
+
+	return len;
+}
+
 static int api_read(const struct device *dev, off_t addr, void *dest,
 		    size_t size)
 {
@@ -437,6 +456,7 @@ static int api_read(const struct device *dev, off_t addr, void *dest,
 		} else {
 			to_read = size;
 		}
+		to_read = limit_xfer_len(to_read, dev_config->max_read_bytes);
 
 		set_up_xfer_with_addr(dev, MSPI_RX, addr, dev_config->data_xfer_mode);
 		dev_data->xfer.rx_dummy        = latency.dummy_cycles;
@@ -487,10 +507,13 @@ static int api_write(const struct device *dev, off_t addr, const void *src,
 	}
 
 	while (size > 0) {
-		/* Split write into parts, each within one page only. */
+		/* Split write into parts, each within one page only, and
+		 * within the limit of a single program transfer.
+		 */
 		uint16_t page_offset = (uint16_t)(addr % page_size);
 		uint16_t page_left = page_size - page_offset;
-		uint16_t to_write = (uint16_t)MIN(size, page_left);
+		uint16_t to_write = (uint16_t)limit_xfer_len(MIN(size, page_left),
+							     dev_config->max_program_bytes);
 
 		rc = cmd_wren(dev);
 		if (rc < 0) {
@@ -1561,6 +1584,8 @@ BUILD_ASSERT((FLASH_SIZE_INST(inst) % CONFIG_FLASH_MSPI_NOR_LAYOUT_PAGE_SIZE) ==
 		.bus = DEVICE_DT_GET(DT_INST_BUS(inst)),			\
 		.packet_data_limit = DT_PROP_OR(DT_INST_BUS(inst),		\
 						packet_data_limit, 0),		\
+		.max_program_bytes = DT_INST_PROP_OR(inst, max_program_bytes, 0), \
+		.max_read_bytes = DT_INST_PROP_OR(inst, max_read_bytes, 0),	\
 		.flash_size = FLASH_SIZE_INST(inst),				\
 		.page_size = FLASH_PAGE_SIZE_INST(inst),			\
 		.mspi_id = MSPI_DEVICE_ID_DT_INST(inst),			\

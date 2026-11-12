@@ -83,6 +83,9 @@ struct flash_mspi_nor_switch_info {
 struct flash_mspi_nor_config {
 	const struct device *bus;
 	uint32_t packet_data_limit;
+	/* Per-transfer data limits from DT, 0 if none. */
+	uint16_t max_program_bytes;
+	uint16_t max_read_bytes;
 	uint32_t flash_size;
 	uint16_t page_size;
 	struct mspi_dev_id mspi_id;
