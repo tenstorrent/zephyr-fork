@@ -55,6 +55,20 @@ properties:
     description: |
       Number of items that can be stored in the RX FIFO.
 
+  fifo-bound-transfers:
+    type: boolean
+    description: |
+      Set for a core that has neither a transfer start FIFO level
+      (TXFTLR.TXFTHR) nor clock stretching. Such a core ends the transfer,
+      deasserting the slave select line, as soon as its TX FIFO runs empty,
+      so refilling the FIFO during a transfer is a race against the serial
+      clock that cannot be won reliably.
+
+      With this property, every packet must fit in the FIFOs: all of its TX
+      FIFO entries are written before the transfer is started, and all of
+      its received frames fit in the RX FIFO. Packets that do not fit are
+      rejected, and asynchronous and DMA transfers are not supported.
+
   tx-fifo-threshold:
     type: int
     min: 0
