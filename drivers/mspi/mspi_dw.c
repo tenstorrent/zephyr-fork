@@ -1173,6 +1173,8 @@ static int start_next_packet(const struct device *dev)
 		&dev_data->xfer.packets[dev_data->packets_done];
 	bool data_only_packet = dev_data->xfer.cmd_length == 0 &&
 				dev_data->xfer.addr_length == 0;
+	bool eeprom_read = dev_data->standard_spi && !data_only_packet &&
+			   packet->dir == MSPI_RX && packet->num_bytes != 0;
 	bool xip_enabled = COND_CODE_1(CONFIG_MSPI_XIP,
 				       (dev_data->xip_enabled != 0),
 				       (false));
@@ -1272,29 +1274,27 @@ static int start_next_packet(const struct device *dev)
 
 		/* In Standard SPI Mode, the controller does not support
 		 * sending the command and address fields separately, they
-		 * need to be sent as data; hence, for RX packets with these
-		 * fields, the TX/RX transfer mode needs to be used and
-		 * consequently, dummy bytes need to be transmitted so that
-		 * clock cycles for the RX part are provided (the controller
-		 * does not do it automatically in the TX/RX mode).
+		 * need to be sent as data. For RX packets with these fields,
+		 * the EEPROM read mode is used: the controller sends the TX
+		 * FIFO content (command, address and dummy bytes), and then
+		 * receives the number of frames set in CTRLR1 on its own.
+		 * All of the TX entries must be in the FIFO before the
+		 * transfer starts, as it is not possible to add any later.
 		 */
-		if (dev_data->standard_spi && !data_only_packet) {
-			uint32_t rx_total_bytes;
-			uint32_t dummy_cycles = dev_data->xfer.rx_dummy;
+		if (eeprom_read) {
+			uint32_t tx_entries = dev_data->xfer.cmd_length
+					    + dev_data->xfer.addr_length
+					    + dev_data->xfer.rx_dummy / 8;
 
-			dev_data->bytes_to_discard = dev_data->xfer.cmd_length
-						   + dev_data->xfer.addr_length
-						   + dummy_cycles / 8;
-			rx_total_bytes = dev_data->bytes_to_discard
-				       + packet->num_bytes;
+			if (tx_entries > dev_config->tx_fifo_depth_minus_1 + 1U) {
+				LOG_ERR("Command, address and dummy bytes (%u) exceed TX FIFO",
+					tx_entries);
+				return -EINVAL;
+			}
 
-			dev_data->dummy_bytes = dummy_cycles / 8
-					      + packet->num_bytes;
-
-			imr = IMR_TXEIM_BIT | IMR_RXFIM_BIT;
-			tmod = CTRLR0_TMOD_TX_RX;
-			/* For standard SPI, only 1-byte frames are used. */
-			rx_fifo_threshold = MIN(rx_total_bytes - 1,
+			imr = IMR_RXFIM_BIT;
+			tmod = CTRLR0_TMOD_EEPROM;
+			rx_fifo_threshold = MIN(data_frames - 1,
 						dev_config->rx_fifo_threshold);
 		} else {
 			imr = IMR_RXFIM_BIT;
@@ -1382,7 +1382,7 @@ static int start_next_packet(const struct device *dev)
 		dev_data->buf_pos = packet->data_buf;
 		dev_data->buf_end = &packet->data_buf[packet->num_bytes];
 		/* Set the TX FIFO threshold and its transmit start level. */
-		if (packet->num_bytes) {
+		if (packet->num_bytes && !eeprom_read) {
 			/* If there is some data to send/receive, set the threshold to
 			 * the value configured for the driver instance and the start
 			 * level to the maximum possible value (it will be updated later
@@ -1405,10 +1405,11 @@ static int start_next_packet(const struct device *dev)
 		} else {
 			uint32_t total_tx_entries = 0;
 
-			/* It the whole transfer is to contain only the command and/or
-			 * address, set up the transfer to start right after entries
-			 * for those appear in the TX FIFO, and the threshold to 0,
-			 * so that the interrupt occurs when the TX FIFO gets emptied.
+			/* If the whole transfer is to contain only the command and/or
+			 * address, or it is an EEPROM read, set up the transfer to
+			 * start right after all TX entries appear in the TX FIFO,
+			 * and the threshold to 0, so that the interrupt occurs when
+			 * the TX FIFO gets emptied.
 			 */
 			if (dev_data->xfer.cmd_length) {
 				if (dev_data->standard_spi) {
@@ -1427,6 +1428,10 @@ static int start_next_packet(const struct device *dev)
 						dev_data->xfer.mode_bit_cycles) > 32
 						? 2 : 1;
 				}
+			}
+
+			if (eeprom_read) {
+				total_tx_entries += dev_data->xfer.rx_dummy / 8;
 			}
 
 			write_txftlr(dev, FIELD_PREP(TXFTLR_TXFTHR_MASK,
@@ -1451,6 +1456,12 @@ static int start_next_packet(const struct device *dev)
 			if (dev_data->xfer.addr_length) {
 				tx_control_field(dev, packet->address,
 						 dev_data->xfer.addr_length);
+			}
+
+			if (eeprom_read) {
+				for (uint32_t i = 0; i < dev_data->xfer.rx_dummy / 8; i++) {
+					write_dr(dev, 0);
+				}
 			}
 		} else {
 			if (dev_data->xfer.cmd_length) {
