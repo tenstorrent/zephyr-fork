@@ -52,11 +52,14 @@
 /* RXFTLR - Receive FIFO Threshold Level */
 #define RXFTLR_RFT_MASK		GENMASK(7, 0)
 
-/* TXFLR - Transmit FIFO Level Register */
-#define TXFLR_TXTFL_MASK	GENMASK(7, 0)
+/* TXFLR - Transmit FIFO Level Register
+ * The level field is one bit wider than the FIFO address so that a full
+ * 256-entry FIFO can be told apart from an empty one.
+ */
+#define TXFLR_TXTFL_MASK	GENMASK(8, 0)
 
 /* RXFLR - Receive FIFO Level Register */
-#define RXFLR_RXTFL_MASK	GENMASK(7, 0)
+#define RXFLR_RXTFL_MASK	GENMASK(8, 0)
 
 /* SR - Status Register */
 #define SR_BUSY_BIT	        BIT(0)
@@ -185,11 +188,13 @@
 #define DMACR_TDMAE_BIT			BIT(1)
 #define DMACR_RDMAE_BIT			BIT(0)
 
-/* DMATDLR - DMA Transmit Data Level */
-#define DMATDLR_DMATDL_MASK		GENMASK(3, 0)
+/* DMATDLR - DMA Transmit Data Level
+ * As with the other FIFO-sized fields, sized for a 256-entry FIFO.
+ */
+#define DMATDLR_DMATDL_MASK		GENMASK(7, 0)
 
 /* DMARDLR - DMA Receive Data Level */
-#define DMARDLR_DMARDL_MASK		GENMASK(3, 0)
+#define DMARDLR_DMARDL_MASK		GENMASK(7, 0)
 
 /* Register access helpers. */
 #define USES_AUX_REG(inst) + DT_INST_PROP(inst, aux_reg_enable)
