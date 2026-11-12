@@ -113,6 +113,24 @@ properties:
       bus in communication with the flash chip. The default value is the one
       that was previously hard-coded in the flash_mspi_nor driver.
 
+  max-program-bytes:
+    type: int
+    description: |
+      Maximum number of data bytes sent in one page program transfer, for a
+      controller that cannot take a whole page in one transfer, e.g. one
+      whose transfers must fit in its FIFO. A page is then programmed in
+      several parts. Parts longer than 4 bytes are also kept to a multiple
+      of 4 bytes, so that the controller can use 32-bit data frames for all
+      but the last few bytes. When omitted, whole pages are programmed.
+
+  max-read-bytes:
+    type: int
+    description: |
+      Maximum number of data bytes received in one read transfer, in
+      addition to the controller's `packet-data-limit`. Parts longer than
+      4 bytes are also kept to a multiple of 4 bytes, as for
+      `max-program-bytes`. When omitted, only `packet-data-limit` applies.
+
   use-4byte-addressing:
     type: boolean
     description: |
