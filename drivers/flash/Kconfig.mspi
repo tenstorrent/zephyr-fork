@@ -79,6 +79,18 @@ config FLASH_MSPI_NOR_LAYOUT_PAGE_SIZE
 	  Other options include the 32K-byte erase size (32768), the sector
 	  size (4096), or any non-zero multiple of the sector size.
 
+config FLASH_MSPI_NOR_PP_POLL_US
+	int "Status poll period while a page is programmed (us)"
+	default 1000
+	help
+	  Time to sleep between reads of the status register while waiting
+	  for a page program to complete. A page program takes from tens to
+	  hundreds of microseconds, depending on the chip and on how much of
+	  the page is programmed, so a long period adds to every program.
+	  The sleep is rounded up to whole system ticks. With 0, the status
+	  register is polled without sleeping, only yielding to other ready
+	  threads of the same priority.
+
 config FLASH_MSPI_NOR_ACTIVE_DWELL_MS
 	int "Dwell period (ms) after last use to stay in active mode"
 	depends on PM_DEVICE_RUNTIME
