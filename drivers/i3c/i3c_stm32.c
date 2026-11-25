@@ -1512,7 +1512,6 @@ static int i3c_stm32_pm_action(const struct device *dev, enum pm_device_action a
 }
 #endif
 
-#ifdef CONFIG_I3C_CONTROLLER
 #ifdef CONFIG_I3C_STM32_DMA
 static int i3c_stm32_dma_stream_config(const struct device *dev,
 				       struct i3c_stm32_dma_stream *dma_stream, uint64_t src_addr,
@@ -1553,7 +1552,7 @@ static int i3c_stm32_dma_stream_config(const struct device *dev,
 }
 
 /* Initializes the I3C DMA */
-static int i3c_stm32_init_dma(const struct device *dev)
+static int __maybe_unused i3c_stm32_init_dma(const struct device *dev)
 {
 	struct i3c_stm32_data *data = dev->data;
 	int err;
@@ -1592,8 +1591,9 @@ static int i3c_stm32_init_dma(const struct device *dev)
 
 	return err;
 }
-#endif
+#endif /* CONFIG_I3C_STM32_DMA */
 
+#ifdef CONFIG_I3C_CONTROLLER
 static void i3c_stm32_controller_init(const struct device *dev)
 {
 	struct i3c_stm32_data *data = dev->data;
@@ -2676,6 +2676,7 @@ static int i3c_stm32_target_ibi_raise(const struct device *dev, struct i3c_ibi *
 static void i3c_stm32_tx_rx_msg_config(const struct device *dma_dev, void *user_data,
 				       uint32_t channel, int status)
 {
+#ifdef CONFIG_I3C_CONTROLLER
 	const struct device *dev = (const struct device *)user_data;
 
 	if (i3c_stm32_curr_msg_xfer_next(dev) != 0) {
@@ -2689,27 +2690,33 @@ static void i3c_stm32_tx_rx_msg_config(const struct device *dma_dev, void *user_
 
 	i3c_stm32_curr_msg_xfer_get_buf(dev, &buf, &len, &offset);
 	i3c_stm32_dma_msg_config(dev, (uint32_t)buf, len);
+#else
+	ARG_UNUSED(dma_dev);
+	ARG_UNUSED(user_data);
+	ARG_UNUSED(channel);
+	ARG_UNUSED(status);
+#endif /* CONFIG_I3C_CONTROLLER */
 }
 
-static void i3c_stm32_dma_tx_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
-				int status)
+static void __maybe_unused i3c_stm32_dma_tx_cb(const struct device *dma_dev, void *user_data,
+					       uint32_t channel, int status)
 {
 	i3c_stm32_tx_rx_msg_config(dma_dev, user_data, channel, status);
 }
 
-static void i3c_stm32_dma_rx_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
-				int status)
+static void __maybe_unused i3c_stm32_dma_rx_cb(const struct device *dma_dev, void *user_data,
+					       uint32_t channel, int status)
 {
 	i3c_stm32_tx_rx_msg_config(dma_dev, user_data, channel, status);
 }
 
-static void i3c_stm32_dma_tc_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
-				int status)
+static void __maybe_unused i3c_stm32_dma_tc_cb(const struct device *dma_dev, void *user_data,
+					       uint32_t channel, int status)
 {
 }
 
-static void i3c_stm32_dma_rs_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
-				int status)
+static void __maybe_unused i3c_stm32_dma_rs_cb(const struct device *dma_dev, void *user_data,
+					       uint32_t channel, int status)
 {
 }
 
