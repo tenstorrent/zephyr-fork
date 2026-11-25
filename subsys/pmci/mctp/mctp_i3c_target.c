@@ -181,11 +181,11 @@ int mctp_i3c_target_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 {
 	struct mctp_binding_i3c_target *b =
 		CONTAINER_OF(binding, struct mctp_binding_i3c_target, binding);
+	unsigned int key;
 	int ret;
 
 	k_sem_take(b->tx_lock, K_FOREVER);
 
-	b->tx_pkt = pkt;
 	b->tx_ptr = 0U;
 
 	size_t pktsize = pkt->end - pkt->start;
@@ -213,11 +213,14 @@ int mctp_i3c_target_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 		goto out;
 	}
 
+	/* Set before arming: a byte-by-byte driver serves the reply from it once armed */
+	b->tx_pkt = pkt;
+
 	/* Some I3C IP need the data in the TX FIFO before the IBI is raised */
 	ret = i3c_target_tx_write(b->i3c, &pkt->data[pkt->start], pktsize + I3C_PROTOCOL_PEC_SZ, 0);
 	if (ret < 0) {
 		LOG_ERR("i3c_target_tx_write failed: %d", ret);
-		goto out;
+		goto drop;
 	}
 
 #ifdef CONFIG_I3C_USE_IBI
@@ -229,11 +232,32 @@ int mctp_i3c_target_tx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 	};
 
 	ret = i3c_ibi_raise(b->i3c, &ibi_req);
-	__ASSERT_NO_MSG(ret == 0);
-#else
-	ret = 0;
+	if (ret != 0) {
+		/* E.g. the controller disabled IBIs: it will not come for the reply */
+		LOG_WRN("I3C IBI for a reply failed: %d, dropped", ret);
+		goto drop;
+	}
 #endif
-	k_sem_take(b->tx_complete, K_FOREVER);
+	if (k_sem_take(b->tx_complete, K_MSEC(CONFIG_MCTP_I3C_TARGET_TX_TIMEOUT_MS)) != 0) {
+		LOG_WRN("I3C reply not read by the controller, dropped");
+		ret = -ETIMEDOUT;
+		goto drop;
+	}
+	ret = 0;
+	goto out;
+
+drop:
+	/* The driver drops a reply still armed when the next one is written */
+	key = irq_lock();
+	b->tx_pkt = NULL;
+	irq_unlock(key);
+	k_sem_reset(b->tx_complete);
+	/* libmctp keeps a packet the binding calls -EBUSY on and waits for the binding to re-enable
+	 * TX, which this binding never does: drop the packet instead.
+	 */
+	if (ret == -EBUSY) {
+		ret = -EIO;
+	}
 
 out:
 	k_sem_give(b->tx_lock);

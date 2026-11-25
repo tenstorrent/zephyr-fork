@@ -115,6 +115,16 @@ config MCTP_I3C_TARGET
 	  Build the MCTP I3C target binding to use MCTP over Zephyr's I3C target
 	  interface and optionally IBI to signal a request to send messages to the bus controller.
 
+config MCTP_I3C_TARGET_TX_TIMEOUT_MS
+	int "Time the controller has to read a reply"
+	depends on MCTP_I3C_TARGET
+	range 1 60000
+	default 1000
+	help
+	  After raising the IBI for a reply, wait at most this long for the
+	  controller to read it. A reply that is not read is dropped, so a
+	  lost IBI or a missing controller does not block the sender forever.
+
 config MCTP_USB
 	bool "MCTP USB Binding"
 	depends on USB_DEVICE_STACK_NEXT
