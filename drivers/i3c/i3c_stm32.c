@@ -2546,13 +2546,11 @@ static int i3c_stm32_target_tx_write(const struct device *dev, uint8_t *buf, uin
 
 	if (LL_I3C_IsActiveTxPreload(i3c)) {
 		LOG_ERR("Target preload in progress");
-		k_mutex_unlock(&data->bus_mutex);
 		return -EBUSY;
 	}
 
 	LL_I3C_ConfigTxPreload(i3c, len);
 
-	k_mutex_unlock(&data->bus_mutex);
 	return 0; /* we process 0 bytes here, and let the interrupt drive all bytes through */
 }
 
