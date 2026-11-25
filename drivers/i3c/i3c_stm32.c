@@ -188,6 +188,10 @@ struct i3c_stm32_data {
 
 #ifdef CONFIG_I3C_TARGET
 	struct i3c_target_config *target_config;
+	/* A reply armed by target_tx_write() is being fed to the TX FIFO */
+	bool target_tx_preloaded;
+	/* Bytes of that reply still to be fed */
+	uint16_t target_tx_remaining;
 #endif /*CONFIG_I3C_TARGET*/
 };
 
@@ -1775,13 +1779,31 @@ static void i3c_stm32_process_target_txfnf(const struct device *dev)
 
 	while (LL_I3C_IsActiveFlag_TXFNF(i3c)) {
 
+		/* An armed reply is exactly target_tx_remaining bytes: feeding the FIFO past it
+		 * leaves bytes that the next private read would return first.
+		 */
+		if (data->target_tx_preloaded && data->target_tx_remaining == 0U) {
+			data->target_tx_preloaded = false;
+			LL_I3C_DisableIT_TXFNF(i3c);
+			break;
+		}
+
 		if (data->target_config != NULL && data->target_config->callbacks != NULL) {
 			if (data->target_config->callbacks->read_processed_cb != NULL) {
 				uint8_t byte = 0;
 
-				data->target_config->callbacks->read_processed_cb(
-					data->target_config, &byte);
+				if (data->target_config->callbacks->read_processed_cb(
+					    data->target_config, &byte) < 0) {
+					/* No more data: do not pad the FIFO */
+					data->target_tx_preloaded = false;
+					data->target_tx_remaining = 0U;
+					LL_I3C_DisableIT_TXFNF(i3c);
+					break;
+				}
 				LL_I3C_TransmitData8(i3c, byte);
+				if (data->target_tx_preloaded) {
+					data->target_tx_remaining--;
+				}
 			}
 
 			if (!LL_I3C_IsActiveTxPreload(i3c) &&
@@ -2136,11 +2158,19 @@ static void i3c_stm32_event_isr(void *arg)
 		data->msg_state = STM32_I3C_MSG_IDLE;
 
 #ifdef CONFIG_I3C_TARGET
-		if (!ll_i3c_is_in_controller_mode(i3c) &&
-		    data->target_config != NULL &&
-		    data->target_config->callbacks != NULL &&
-		    data->target_config->callbacks->stop_cb != NULL) {
-			data->target_config->callbacks->stop_cb(data->target_config);
+		if (!ll_i3c_is_in_controller_mode(i3c)) {
+			/* Feeding stops at the end of an armed reply, or when read_processed_cb has
+			 * no more data: unless a reply is still armed, the TXFNF interrupt serves
+			 * the next read again.
+			 */
+			if (!data->target_tx_preloaded) {
+				LL_I3C_EnableIT_TXFNF(i3c);
+			}
+			if (data->target_config != NULL &&
+			    data->target_config->callbacks != NULL &&
+			    data->target_config->callbacks->stop_cb != NULL) {
+				data->target_config->callbacks->stop_cb(data->target_config);
+			}
 		}
 #endif /*CONFIG_I3C_TARGET*/
 	}
@@ -2549,7 +2579,10 @@ static int i3c_stm32_target_tx_write(const struct device *dev, uint8_t *buf, uin
 		return -EBUSY;
 	}
 
+	data->target_tx_remaining = len;
+	data->target_tx_preloaded = true;
 	LL_I3C_ConfigTxPreload(i3c, len);
+	LL_I3C_EnableIT_TXFNF(i3c);
 
 	return 0; /* we process 0 bytes here, and let the interrupt drive all bytes through */
 }
