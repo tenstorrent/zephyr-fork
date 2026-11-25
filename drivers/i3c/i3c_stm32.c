@@ -2507,33 +2507,35 @@ static int i3c_stm32_error(void *arg)
 
 #ifdef CONFIG_I3C_TARGET
 	if (!ll_i3c_is_in_controller_mode(i3c)) {
-#ifdef CONFIG_I3C_TARGET_BUFFER_MODE
 		/* An RX overrun (SER.DOVR) or a parity error aborts the private write: drop
 		 * what was received of it, or it would be prepended to the controller's retry.
 		 */
+#ifdef CONFIG_I3C_TARGET_BUFFER_MODE
 #ifdef CONFIG_I3C_STM32_DMA
 		i3c_stm32_target_rx_dma_disarm(dev);
 #endif /* CONFIG_I3C_STM32_DMA */
-		LL_I3C_RequestRxFIFOFlush(i3c);
 		data->target_rx_len = 0U;
 		data->target_rx_overflow = false;
-#ifdef CONFIG_I3C_STM32_DMA
-		if (i3c_stm32_target_rx_dma_wanted(dev)) {
-			(void)i3c_stm32_target_rx_dma_arm(dev);
-		}
-#endif /* CONFIG_I3C_STM32_DMA */
 #endif /* CONFIG_I3C_TARGET_BUFFER_MODE */
+		LL_I3C_RequestRxFIFOFlush(i3c);
 		/* A target error (e.g. a TX underrun, SER.DOVR) aborts the private read: drop the
-		 * rest of the reply and release it, the controller retries at its own level.
+		 * rest of the reply, the controller retries at its own level.
 		 */
 		if (data->target_tx_len != 0U || LL_I3C_IsActiveTxPreload(i3c)) {
 			i3c_stm32_target_tx_abort(dev);
-			i3c_stm32_target_tx_idle(dev);
-			if (data->target_config != NULL &&
-			    data->target_config->callbacks != NULL &&
-			    data->target_config->callbacks->stop_cb != NULL) {
-				data->target_config->callbacks->stop_cb(data->target_config);
-			}
+		}
+#if defined(CONFIG_I3C_STM32_DMA) && defined(CONFIG_I3C_TARGET_BUFFER_MODE)
+		if (i3c_stm32_target_rx_dma_wanted(dev)) {
+			(void)i3c_stm32_target_rx_dma_arm(dev);
+		}
+#endif /* CONFIG_I3C_STM32_DMA && CONFIG_I3C_TARGET_BUFFER_MODE */
+		i3c_stm32_target_tx_idle(dev);
+		/* The error ended the transfer. A byte-mode target has received part of the write
+		 * through write_received_cb: stop_cb tells it the write is over (and incomplete).
+		 */
+		if (data->target_config != NULL && data->target_config->callbacks != NULL &&
+		    data->target_config->callbacks->stop_cb != NULL) {
+			data->target_config->callbacks->stop_cb(data->target_config);
 		}
 	}
 #endif /* CONFIG_I3C_TARGET */
