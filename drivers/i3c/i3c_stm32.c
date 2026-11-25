@@ -139,6 +139,11 @@ struct i3c_stm32_config {
 #endif
 };
 
+#ifdef CONFIG_I3C_TARGET
+/* Largest reply target_tx_write() takes: it is copied, the caller keeps its buffer */
+#define STM32_I3C_TARGET_TX_BUF_SIZE 256U
+#endif /* CONFIG_I3C_TARGET */
+
 struct i3c_stm32_data {
 	struct i3c_driver_data drv_data;     /* I3C driver data */
 	enum i3c_stm32_msg_state msg_state;  /* Current I3C bus state */
@@ -192,6 +197,15 @@ struct i3c_stm32_data {
 	bool target_tx_preloaded;
 	/* Bytes of that reply still to be fed */
 	uint16_t target_tx_remaining;
+	/* Length of the armed reply, until the private read that returns it completes */
+	uint16_t target_tx_len;
+	/* The armed reply, copied by target_tx_write(): the caller may reuse its buffer */
+	uint8_t target_tx_storage[STM32_I3C_TARGET_TX_BUF_SIZE];
+	/* target_tx_storage while the TXFNF interrupt feeds it, NULL otherwise */
+	const uint8_t *target_tx_buf;
+	uint16_t target_tx_idx;
+	/* The last reply came from target_tx_write() with a buffer, not from read_processed_cb */
+	bool target_tx_from_buf;
 #endif /*CONFIG_I3C_TARGET*/
 };
 
@@ -1777,6 +1791,21 @@ static void i3c_stm32_process_target_txfnf(const struct device *dev)
 	const struct i3c_stm32_config *config = dev->config;
 	I3C_TypeDef *i3c = config->i3c;
 
+	if (data->target_tx_buf != NULL) {
+		/* At 8 MHz a byte leaves every ~1.1 us; the FIFO holds a few: no callback here */
+		while (data->target_tx_idx < data->target_tx_len &&
+		       LL_I3C_IsActiveFlag_TXFNF(i3c)) {
+			LL_I3C_TransmitData8(i3c, data->target_tx_buf[data->target_tx_idx++]);
+		}
+		if (data->target_tx_idx >= data->target_tx_len) {
+			data->target_tx_buf = NULL;
+			data->target_tx_preloaded = false;
+			data->target_tx_remaining = 0U;
+			LL_I3C_DisableIT_TXFNF(i3c);
+		}
+		return;
+	}
+
 	while (LL_I3C_IsActiveFlag_TXFNF(i3c)) {
 
 		/* An armed reply is exactly target_tx_remaining bytes: feeding the FIFO past it
@@ -2161,9 +2190,10 @@ static void i3c_stm32_event_isr(void *arg)
 		if (!ll_i3c_is_in_controller_mode(i3c)) {
 			/* Feeding stops at the end of an armed reply, or when read_processed_cb has
 			 * no more data: unless a reply is still armed, the TXFNF interrupt serves
-			 * the next read again.
+			 * the next read again. Not for a target that arms each reply from a
+			 * buffer: TXFNF stays off until it arms the next one.
 			 */
-			if (!data->target_tx_preloaded) {
+			if (!data->target_tx_preloaded && !data->target_tx_from_buf) {
 				LL_I3C_EnableIT_TXFNF(i3c);
 			}
 			if (data->target_config != NULL &&
@@ -2570,8 +2600,12 @@ static int i3c_stm32_target_tx_write(const struct device *dev, uint8_t *buf, uin
 	const struct i3c_stm32_config *config = dev->config;
 	I3C_TypeDef *i3c = config->i3c;
 
-	if (data->target_config->callbacks->read_processed_cb == NULL) {
+	if (buf == NULL && data->target_config->callbacks->read_processed_cb == NULL) {
 		return -ENOSYS;
+	}
+
+	if (buf != NULL && len > sizeof(data->target_tx_storage)) {
+		return -ENOSPC;
 	}
 
 	if (LL_I3C_IsActiveTxPreload(i3c)) {
@@ -2579,12 +2613,20 @@ static int i3c_stm32_target_tx_write(const struct device *dev, uint8_t *buf, uin
 		return -EBUSY;
 	}
 
+	data->target_tx_from_buf = buf != NULL;
+	if (buf != NULL) {
+		memcpy(data->target_tx_storage, buf, len);
+	}
 	data->target_tx_remaining = len;
+	data->target_tx_len = len;
+	data->target_tx_idx = 0U;
+	data->target_tx_buf = (buf != NULL) ? data->target_tx_storage : NULL;
 	data->target_tx_preloaded = true;
 	LL_I3C_ConfigTxPreload(i3c, len);
 	LL_I3C_EnableIT_TXFNF(i3c);
 
-	return 0; /* we process 0 bytes here, and let the interrupt drive all bytes through */
+	/* The whole reply is taken; with no buffer, read_processed_cb supplies every byte */
+	return (buf != NULL) ? len : 0;
 }
 
 #endif /*CONFIG_I3C_TARGET*/
@@ -2709,6 +2751,10 @@ static DEVICE_API(i3c, i3c_stm32_driver_api) = {
 		I3C_DEVICE_ARRAY_DT_INST(index);                                                   \
 	static struct i3c_i2c_device_desc i3c_i2c_stm32_dev_arr_##index[] =                        \
 		I3C_I2C_DEVICE_ARRAY_DT_INST(index);))                                             \
+                                                                                                   \
+	IF_ENABLED(CONFIG_I3C_TARGET, (                                                            \
+	BUILD_ASSERT(DT_INST_PROP_OR(index, mrl, 0) <= STM32_I3C_TARGET_TX_BUF_SIZE,               \
+		     "mrl exceeds the target reply buffer");))                                     \
                                                                                                    \
 	static const struct i3c_stm32_config i3c_stm32_cfg_##index = {                             \
 		.i3c = (I3C_TypeDef *)DT_INST_REG_ADDR(index),                                     \
